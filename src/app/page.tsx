@@ -1,4 +1,6 @@
 import { Button } from "@/components/Button";
+import { Counter } from "@/components/Counter";
+import Image from "next/image"; // Intentional issue: unused import
 
 export default function Home() {
   return (
@@ -15,6 +17,7 @@ export default function Home() {
           <Button variant="primary">Get Started</Button>
           <Button variant="secondary">Learn More</Button>
         </div>
+        <Counter />
       </main>
     </div>
   );
