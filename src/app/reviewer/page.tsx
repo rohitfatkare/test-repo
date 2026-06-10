@@ -288,6 +288,9 @@ export default function Reviewer() {
   const [chatInput, setChatInput] = useState('');
   const [isChatTyping, setIsChatTyping] = useState(false);
 
+  // Console logs state
+  const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
+
   const handleCopyCode = (text: string, id: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text);
@@ -341,6 +344,14 @@ export default function Reviewer() {
     setAnalysisStep(0);
     setAnalysisResult(null);
     setSelectedIssueId(null);
+
+    // Initialize telemetry logs
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setConsoleLogs([
+      `[${timestamp}] [SYSTEM] Pipeline initialization request received.`,
+      `[${timestamp}] [SYSTEM] Target model: ${selectedModel.toUpperCase()}`,
+      `[${timestamp}] [SYSTEM] Buffer size: ${code.length} characters. AST tokenizer warm-up started.`,
+    ]);
   };
 
   useEffect(() => {
@@ -475,6 +486,13 @@ export default function Reviewer() {
               },
               ...prev
             ]);
+
+            // Terminal completion log
+            setConsoleLogs(prev => [
+              ...prev,
+              `[${timestamp}] [SYSTEM] Audit completed successfully. Quality score determined: ${result.score}/100.`,
+              `[${timestamp}] [SYSTEM] Found ${result.issues.length} audit recommendations. Ready.`
+            ]);
           }, 600);
           return prev;
         }
@@ -484,6 +502,46 @@ export default function Reviewer() {
 
     return () => clearInterval(timer);
   }, [isAnalyzing, code, language, auditSecurity, auditPerformance, auditStyle, selectedModel, steps.length, stepDelay]);
+
+  // Dynamic telemetry log streaming
+  useEffect(() => {
+    if (!isAnalyzing) return;
+
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    
+    if (selectedModel === 'gemini-pro') {
+      const proLogs = [
+        `[${timestamp}] [PARSER] Generating syntax mappings... Found ${code.split('\n').length} lines.`,
+        `[${timestamp}] [SECURITY] Scanning variables against injection and memory vectors...`,
+        `[${timestamp}] [COMPLEXITY] Evaluating loop depths... Calculating cyclomatic indices.`,
+        `[${timestamp}] [OPTIMIZER] Synthesizing nodes... Matching structural templates.`,
+        `[${timestamp}] [COMPILER] Validation complete. Suggestion payloads generated.`
+      ];
+      if (proLogs[analysisStep]) {
+        setConsoleLogs(prev => [...prev, proLogs[analysisStep]]);
+      }
+    } else if (selectedModel === 'claude-sonnet') {
+      const claudeLogs = [
+        `[${timestamp}] [LOADER] Inspecting imports and scoping definitions...`,
+        `[${timestamp}] [VULN] Checking sensitive API boundaries and memory allocators...`,
+        `[${timestamp}] [LINT] Enforcing styling norms, spacing, and strict annotations...`,
+        `[${timestamp}] [MODEL] Re-aligning AST parameters... Checking context bounds.`,
+        `[${timestamp}] [SYSTEM] Complete. Finalizing differences.`
+      ];
+      if (claudeLogs[analysisStep]) {
+        setConsoleLogs(prev => [...prev, claudeLogs[analysisStep]]);
+      }
+    } else { // gemini-flash
+      const flashLogs = [
+        `[${timestamp}] [FAST] Scanning source tokens...`,
+        `[${timestamp}] [FAST] Auditing security counters and structure patterns...`,
+        `[${timestamp}] [FAST] Completed review recommendations.`
+      ];
+      if (flashLogs[analysisStep]) {
+        setConsoleLogs(prev => [...prev, flashLogs[analysisStep]]);
+      }
+    }
+  }, [analysisStep, isAnalyzing, selectedModel]);
 
   // Apply suggested fix
   const handleApplyFix = (issue: Issue) => {
@@ -808,6 +866,50 @@ ${issue.message}
               <p className="text-[10px] text-slate-400 font-medium font-mono">
                 {steps[analysisStep]}
               </p>
+            </div>
+          )}
+
+          {/* Telemetry Log Terminal */}
+          {(isAnalyzing || consoleLogs.length > 0) && (
+            <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 font-mono text-[10px] leading-relaxed shadow-lg flex flex-col h-[200px] space-y-3">
+              {/* Terminal Header */}
+              <div className="flex items-center justify-between border-b border-slate-800/60 pb-2.5 text-slate-500 select-none">
+                <div className="flex items-center gap-2">
+                  <span className="flex h-2 w-2 relative">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">Telemetry Log Terminal</span>
+                </div>
+                <button 
+                  type="button" 
+                  onClick={() => setConsoleLogs([])} 
+                  className="text-[10px] font-bold text-slate-500 hover:text-slate-300 transition-colors uppercase tracking-wider cursor-pointer"
+                >
+                  Clear Logs
+                </button>
+              </div>
+              
+              {/* Terminal Stream */}
+              <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar text-emerald-400/90 font-mono pr-1 select-text">
+                {consoleLogs.map((log, i) => {
+                  let colorClass = "text-emerald-400/90";
+                  if (log.includes("[WARN]")) colorClass = "text-amber-400/90";
+                  if (log.includes("[ERROR]") || log.includes("[VULN]") || log.includes("[SECURITY]")) colorClass = "text-rose-400/90";
+                  if (log.includes("[SYSTEM]")) colorClass = "text-indigo-400/95 font-semibold";
+                  return (
+                    <div key={i} className={`whitespace-pre-wrap ${colorClass}`}>
+                      {log}
+                    </div>
+                  );
+                })}
+                {isAnalyzing && (
+                  <div className="text-slate-500 animate-pulse flex items-center gap-1.5">
+                    <span>$ awaiting next packet</span>
+                    <span className="w-1 h-3.5 bg-slate-500 inline-block" />
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
