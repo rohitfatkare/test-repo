@@ -214,6 +214,7 @@ export default function Reviewer() {
 
   // Selected issue for diff view
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
+  const [isCopied, setIsCopied] = useState(false);
 
   const steps = [
     'Parsing abstract syntax tree (AST)...',
@@ -756,12 +757,25 @@ export default function Reviewer() {
               </p>
             </div>
             
-            <button
-              onClick={() => handleApplyFix(currentIssue)}
-              className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg transition-colors focus:outline-none"
-            >
-              Apply Refactor Fix
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard.writeText(currentIssue.after);
+                  setIsCopied(true);
+                  setTimeout(() => setIsCopied(false), 2000);
+                }}
+                className="flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs px-4 py-2.5 rounded-xl transition-colors focus:outline-none border border-slate-750"
+              >
+                {isCopied ? '✓ Copied' : '📋 Copy Fix'}
+              </button>
+              <button
+                onClick={() => handleApplyFix(currentIssue)}
+                className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg transition-colors focus:outline-none"
+              >
+                Apply Refactor Fix
+              </button>
+            </div>
           </div>
 
           {/* Description & Explanation */}
