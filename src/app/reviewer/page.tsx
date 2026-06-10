@@ -32,6 +32,11 @@ interface HistoryItem {
   result: ReviewResult;
 }
 
+interface ChatMessage {
+  sender: 'user' | 'ai';
+  text: string;
+}
+
 const examples = {
   javascript: {
     name: 'JS SQL Injection & Leak',
@@ -207,6 +212,51 @@ const mockReviews: Record<string, ReviewResult> = {
   }
 };
 
+const getSimulatedResponse = (question: string, issue: Issue): string => {
+  const q = question.toLowerCase();
+  
+  if (q.includes('why') || q.includes('reason') || q.includes('explain') || q.includes('flag')) {
+    if (issue.category === 'Security' || issue.category === 'Security Risk') {
+      return `This is marked as a critical security issue because direct interpolation of user inputs into commands (like SQL or system commands) bypasses parameterized shielding. An attacker can append inputs like "1 OR 1=1" to view unauthorized database tables, or execute payloads that delete database nodes. By using parameterized queries, the database engine treats input strictly as data, never executable statements.`;
+    }
+    if (issue.category === 'Memory Leak') {
+      return `A memory leak occurs because JavaScript's garbage collector only releases objects when there are no active references to them. Since the requestLogs array is defined in the global scope, it is never collected. Every HTTP call appends a new object, continuously increasing heap usage until the node process runs out of memory (OOM crash). Bounded caches like LRU automatically prune old keys to maintain a stable memory footprint.`;
+    }
+    if (issue.category === 'Complexity' || issue.category === 'Complexity Check') {
+      return `Double nested loops cause O(N^2) complexity because for every single item in the first list, we must iterate through the entire second list. If both lists have 10,000 items, that is 100,000,000 operations! By indexing the second list into a hash set first, checking presence becomes a constant-time O(1) operation, reducing the total lookup to linear O(N) time.`;
+    }
+    return `This issue was flagged because the current code structure creates execution risks, poor maintainability, or suboptimal performance. Refactoring it simplifies the call stack and ensures the compiler can optimize the execution path.`;
+  }
+  
+  if (q.includes('alternative') || q.includes('other') || q.includes('different') || q.includes('else')) {
+    if (issue.category === 'Security' || issue.category === 'Security Risk') {
+      return `Yes, an alternative approach is to use an Object-Relational Mapper (ORM) like Prisma, Sequelize, or Mongoose. ORMs automatically parameterize queries under the hood. For example:
+\`\`\`javascript
+const user = await db.user.findUnique({ where: { id } });
+\`\`\`
+This completely eliminates manual SQL syntax hazards!`;
+    }
+    if (issue.category === 'Complexity') {
+      return `In Python, you can also use set intersection directly to extract matched objects, which is highly readable and extremely fast:
+\`\`\`python
+# Alternative set intersection
+keys_a = set(item['id'] for item in list_a)
+keys_b = set(item['id'] for item in list_b)
+common_ids = keys_a.intersection(keys_b)
+pairs = [item for item in list_a if item['id'] in common_ids]
+\`\`\``;
+    }
+    return `Alternatively, you could abstract this logic into a helper utility or use a robust middleware library to intercept errors or validate shapes at the boundaries of your system.`;
+  }
+
+  if (q.includes('how') && q.includes('fix')) {
+    return `To apply the fix, you can click the "Apply Refactor Fix" button at the top right of this panel. This will automatically parse the file and substitute the buggy block with the optimized code shown in the diff comparison.`;
+  }
+
+  // Fallback response
+  return `That's a great question! For this particular issue (${issue.category}), it is recommended to replace the current syntax with the suggested code block because it enhances code safety, aligns with standard linter directives, and prevents potential runtime exceptions. Let me know if you would like me to detail any specific line of the suggestion!`;
+};
+
 export default function Reviewer() {
   const [code, setCode] = useState(examples.javascript.code);
   const [language, setLanguage] = useState<'javascript' | 'typescript' | 'python' | 'custom'>('javascript');
@@ -215,6 +265,9 @@ export default function Reviewer() {
   const [auditSecurity, setAuditSecurity] = useState(true);
   const [auditPerformance, setAuditPerformance] = useState(true);
   const [auditStyle, setAuditStyle] = useState(true);
+
+  // Selected AI Model
+  const [selectedModel, setSelectedModel] = useState<'gemini-flash' | 'gemini-pro' | 'claude-sonnet'>('gemini-flash');
 
   // Loading analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -230,6 +283,11 @@ export default function Reviewer() {
   // Recent reviews history
   const [history, setHistory] = useState<HistoryItem[]>([]);
 
+  // Interactive Explainer Chat State
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const [isChatTyping, setIsChatTyping] = useState(false);
+
   const handleCopyCode = (text: string, id: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text);
@@ -238,12 +296,33 @@ export default function Reviewer() {
     }
   };
 
-  const steps = [
-    'Parsing abstract syntax tree (AST)...',
-    'Auditing security tokens & memory scopes...',
-    'Evaluating control flow & complexity index...',
-    'Generating refactored syntax recommendations...'
-  ];
+  const steps = selectedModel === 'gemini-pro' 
+    ? [
+        'Initializing deep neural parser...',
+        'Auditing memory vectors & potential leaks...',
+        'Evaluating AST tree & computational complexity...',
+        'Structuring secure refactoring nodes...',
+        'Generating deep optimized recommendations...'
+      ]
+    : selectedModel === 'claude-sonnet'
+    ? [
+        'Compiling tokens & imports...',
+        'Auditing security boundary vectors...',
+        'Verifying lint constraints & standards...',
+        'Refining model output alignment...',
+        'Assembling syntax diff recommendations...'
+      ]
+    : [ // gemini-flash
+        'Parsing code tree...',
+        'Auditing security & memory leaks...',
+        'Generating fast suggestions...'
+      ];
+
+  const stepDelay = selectedModel === 'gemini-pro' 
+    ? 700 
+    : selectedModel === 'claude-sonnet' 
+    ? 1000 
+    : 500;
 
   // Load example code
   const handleSelectExample = (lang: 'javascript' | 'typescript' | 'python') => {
@@ -401,10 +480,10 @@ export default function Reviewer() {
         }
         return prev + 1;
       });
-    }, 900);
+    }, stepDelay);
 
     return () => clearInterval(timer);
-  }, [isAnalyzing, code, language, auditSecurity, auditPerformance, auditStyle]);
+  }, [isAnalyzing, code, language, auditSecurity, auditPerformance, auditStyle, selectedModel, steps.length, stepDelay]);
 
   // Apply suggested fix
   const handleApplyFix = (issue: Issue) => {
@@ -481,6 +560,81 @@ export default function Reviewer() {
   };
 
   const currentIssue = analysisResult?.issues.find(i => i.id === selectedIssueId);
+
+  const handleExportReport = () => {
+    if (!analysisResult) return;
+    
+    const time = new Date().toLocaleString();
+    const mdContent = `# AI Code Review Audit Report
+Generated on: ${time}
+AI Model: ${selectedModel === 'gemini-flash' ? 'Gemini 3.5 Flash' : selectedModel === 'gemini-pro' ? 'Gemini 3.5 Pro' : 'Claude 3.5 Sonnet'}
+Language: ${language.toUpperCase()}
+Quality Score: ${analysisResult.score}/100
+Maintainability Index: ${analysisResult.maintainability}
+
+## Summary
+${analysisResult.summary}
+
+## Issue Breakdown
+- **Critical Issues:** ${analysisResult.criticalCount}
+- **Warnings:** ${analysisResult.warningCount}
+- **Optimization Suggestions:** ${analysisResult.infoCount}
+
+## Detailed Findings
+${analysisResult.issues.map((issue, index) => `
+### ${index + 1}. [${issue.type.toUpperCase()}] ${issue.category} - ${issue.lineRange}
+**Diagnosis:**
+${issue.message}
+
+**Code Diff:**
+\`\`\`diff
+- ${issue.before.split('\n').join('\n- ')}
++ ${issue.after.split('\n').join('\n+ ')}
+\`\`\`
+`).join('\n')}
+
+---
+*Report generated by Antigravity AI Code Reviewer.*`;
+
+    const blob = new Blob([mdContent], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Code_Review_Report_${language}_${Date.now()}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleSendChatMessage = (text: string) => {
+    if (!text.trim() || isChatTyping || !currentIssue) return;
+
+    const userMessage: ChatMessage = { sender: 'user', text };
+    setChatMessages(prev => [...prev, userMessage]);
+    setChatInput('');
+    setIsChatTyping(true);
+
+    setTimeout(() => {
+      const replyText = getSimulatedResponse(text, currentIssue);
+      setChatMessages(prev => [...prev, { sender: 'ai', text: replyText }]);
+      setIsChatTyping(false);
+    }, 1200);
+  };
+
+  // Reset/Initialize Chat History when selected issue changes
+  useEffect(() => {
+    if (currentIssue) {
+      setChatMessages([
+        {
+          sender: 'ai',
+          text: `Hello! I've flagged this line range (${currentIssue.lineRange}) as a **${currentIssue.type}** severity issue in the **${currentIssue.category}** category. How can I help you understand this diagnosis or explore other ways to fix it?`
+        }
+      ]);
+    } else {
+      setChatMessages([]);
+    }
+  }, [selectedIssueId]);
 
   return (
     <div className="space-y-8 animate-fade-in text-slate-100">
@@ -581,40 +735,57 @@ export default function Reviewer() {
 
             {/* Audit Settings Panel */}
             <div className="p-4 bg-slate-950/70 border-t border-slate-850 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
-                  <input
-                    type="checkbox"
-                    checked={auditSecurity}
-                    onChange={(e) => setAuditSecurity(e.target.checked)}
-                    className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
-                  />
-                  Security Audit
-                </label>
-                <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
-                  <input
-                    type="checkbox"
-                    checked={auditPerformance}
-                    onChange={(e) => setAuditPerformance(e.target.checked)}
-                    className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
-                  />
-                  Complexity Limits
-                </label>
-                <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
-                  <input
-                    type="checkbox"
-                    checked={auditStyle}
-                    onChange={(e) => setAuditStyle(e.target.checked)}
-                    className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
-                  />
-                  Style & Quality
-                </label>
+              <div className="flex flex-wrap items-center gap-6">
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
+                    <input
+                      type="checkbox"
+                      checked={auditSecurity}
+                      onChange={(e) => setAuditSecurity(e.target.checked)}
+                      className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
+                    />
+                    Security Audit
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
+                    <input
+                      type="checkbox"
+                      checked={auditPerformance}
+                      onChange={(e) => setAuditPerformance(e.target.checked)}
+                      className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
+                    />
+                    Complexity Limits
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
+                    <input
+                      type="checkbox"
+                      checked={auditStyle}
+                      onChange={(e) => setAuditStyle(e.target.checked)}
+                      className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
+                    />
+                    Style & Quality
+                  </label>
+                </div>
+
+                <div className="h-4 w-px bg-slate-800/80 hidden sm:block" />
+
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">AI Model:</span>
+                  <select
+                    value={selectedModel}
+                    onChange={(e) => setSelectedModel(e.target.value as any)}
+                    className="bg-slate-900 border border-slate-850 rounded-xl px-2.5 py-1 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 transition-colors"
+                  >
+                    <option value="gemini-flash">Gemini 3.5 Flash</option>
+                    <option value="gemini-pro">Gemini 3.5 Pro</option>
+                    <option value="claude-sonnet">Claude 3.5 Sonnet</option>
+                  </select>
+                </div>
               </div>
 
               <button
                 type="submit"
                 disabled={isAnalyzing || !code.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-500/10"
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 cursor-pointer"
               >
                 {isAnalyzing ? 'Analyzing...' : 'Run Code Review'}
               </button>
@@ -662,15 +833,32 @@ export default function Reviewer() {
           {!isAnalyzing && analysisResult && (
             <div className="space-y-6">
               {/* Score summary card */}
-              <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 relative overflow-hidden flex items-center justify-between gap-6">
+              <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 relative overflow-hidden flex flex-col gap-4">
                 <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 rounded-full bg-indigo-500/5 blur-xl" />
                 
-                <div className="space-y-2">
-                  <h3 className="text-sm font-bold text-slate-200 uppercase tracking-wider">Health Rating</h3>
-                  <div className="flex items-baseline gap-2">
-                    <span className="text-4xl font-extrabold text-white">{analysisResult.score}</span>
-                    <span className="text-xs text-slate-500 font-bold">/ 100</span>
+                <div className="flex items-start justify-between relative z-10">
+                  <div className="space-y-2">
+                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Health Rating</h3>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-4xl font-extrabold text-white">{analysisResult.score}</span>
+                      <span className="text-xs text-slate-500 font-bold">/ 100</span>
+                    </div>
                   </div>
+                  
+                  {/* Download Report Button */}
+                  <button
+                    type="button"
+                    onClick={handleExportReport}
+                    className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold px-3 py-1.5 rounded-xl border border-indigo-500/15 bg-indigo-500/5 hover:bg-indigo-500/10 transition-colors focus:outline-none cursor-pointer"
+                  >
+                    <span>Download Report</span>
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                    </svg>
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between gap-6 border-t border-slate-900/60 pt-3 relative z-10">
                   <div className="flex items-center gap-2 mt-1">
                     <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
                       analysisResult.score >= 80 
@@ -685,24 +873,24 @@ export default function Reviewer() {
                       Maintainability: <strong className="text-slate-300">{analysisResult.maintainability}</strong>
                     </span>
                   </div>
-                </div>
 
-                {/* Score wheel circle */}
-                <div className="relative w-24 h-24 shrink-0 flex items-center justify-center">
-                  <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
-                    <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#1e293b" strokeWidth="3" />
-                    <circle 
-                      cx="18" 
-                      cy="18" 
-                      r="15.915" 
-                      fill="transparent" 
-                      stroke={analysisResult.score >= 80 ? '#10b981' : analysisResult.score >= 50 ? '#f59e0b' : '#f43f5e'} 
-                      strokeWidth="3" 
-                      strokeDasharray={`${analysisResult.score} 100`}
-                      className="transition-all duration-1000 ease-out"
-                    />
-                  </svg>
-                  <span className="absolute text-xs font-black text-slate-300">{analysisResult.score}%</span>
+                  {/* Score wheel circle */}
+                  <div className="relative w-12 h-12 shrink-0 flex items-center justify-center">
+                    <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
+                      <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#1e293b" strokeWidth="3" />
+                      <circle 
+                        cx="18" 
+                        cy="18" 
+                        r="15.915" 
+                        fill="transparent" 
+                        stroke={analysisResult.score >= 80 ? '#10b981' : analysisResult.score >= 50 ? '#f59e0b' : '#f43f5e'} 
+                        strokeWidth="3" 
+                        strokeDasharray={`${analysisResult.score} 100`}
+                        className="transition-all duration-1000 ease-out"
+                      />
+                    </svg>
+                    <span className="absolute text-[10px] font-black text-slate-300">{analysisResult.score}%</span>
+                  </div>
                 </div>
               </div>
 
@@ -894,6 +1082,106 @@ export default function Reviewer() {
             </div>
 
           </div>
+
+          {/* Explainer Chat */}
+          <div className="border-t border-slate-850 pt-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2 w-2 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                </span>
+                <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">
+                  Ask AI Explainer Assistant
+                </h4>
+              </div>
+              <span className="text-[10px] text-slate-500">Simulating interactive feedback loop</span>
+            </div>
+
+            {/* Chat Screen */}
+            <div className="bg-slate-950/70 border border-slate-900 rounded-xl p-4 flex flex-col h-[280px]">
+              {/* Message History */}
+              <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar mb-4">
+                {chatMessages.map((msg, i) => (
+                  <div key={i} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
+                      msg.sender === 'user'
+                        ? 'bg-indigo-600 text-white rounded-tr-none'
+                        : 'bg-slate-900 border border-slate-800 text-slate-300 rounded-tl-none'
+                    }`}>
+                      {msg.text.split('\n').map((line, j) => (
+                        <p key={j} className={j > 0 ? 'mt-1.5' : ''}>{line}</p>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+                
+                {isChatTyping && (
+                  <div className="flex justify-start">
+                    <div className="bg-slate-900 border border-slate-800 text-slate-400 rounded-2xl rounded-tl-none px-4 py-3 flex gap-1.5 items-center">
+                      <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Quick Preset Buttons */}
+              <div className="flex flex-wrap gap-2 mb-3">
+                <button
+                  type="button"
+                  disabled={isChatTyping}
+                  onClick={() => handleSendChatMessage('Why is this flagged as an issue?')}
+                  className="bg-slate-900 hover:bg-slate-850 border border-slate-800 disabled:opacity-50 text-[10px] font-semibold text-slate-300 px-3 py-1.5 rounded-lg transition-colors focus:outline-none cursor-pointer"
+                >
+                  ❓ Why is this flagged?
+                </button>
+                <button
+                  type="button"
+                  disabled={isChatTyping}
+                  onClick={() => handleSendChatMessage('Are there alternative ways to write this?')}
+                  className="bg-slate-900 hover:bg-slate-850 border border-slate-800 disabled:opacity-50 text-[10px] font-semibold text-slate-300 px-3 py-1.5 rounded-lg transition-colors focus:outline-none cursor-pointer"
+                >
+                  ⚡ Alternative approaches?
+                </button>
+                <button
+                  type="button"
+                  disabled={isChatTyping}
+                  onClick={() => handleSendChatMessage('How do I apply this fix?')}
+                  className="bg-slate-900 hover:bg-slate-850 border border-slate-800 disabled:opacity-50 text-[10px] font-semibold text-slate-300 px-3 py-1.5 rounded-lg transition-colors focus:outline-none cursor-pointer"
+                >
+                  🔧 How to apply fix?
+                </button>
+              </div>
+
+              {/* Chat Input Field */}
+              <form 
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  handleSendChatMessage(chatInput);
+                }}
+                className="flex gap-2"
+              >
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  disabled={isChatTyping}
+                  placeholder="Ask AI about this suggestion..."
+                  className="flex-1 bg-slate-900 border border-slate-800 rounded-xl px-4 py-2 text-xs text-slate-300 placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors"
+                />
+                <button
+                  type="submit"
+                  disabled={isChatTyping || !chatInput.trim()}
+                  className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+                >
+                  Send
+                </button>
+              </form>
+            </div>
+          </div>
+
         </div>
       )}
     </div>
