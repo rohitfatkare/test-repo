@@ -14,7 +14,8 @@ import {
   XIcon,
   BellIcon,
   SearchIcon,
-  LogOutIcon
+  LogOutIcon,
+  CodeIcon
 } from './Icons';
 
 interface SidebarItem {
@@ -26,11 +27,13 @@ interface SidebarItem {
 const sidebarItems: SidebarItem[] = [
   { name: 'Home', href: '/', icon: HomeIcon },
   { name: 'Dashboard', href: '/dashboard', icon: DashboardIcon },
+  { name: 'AI Reviewer', href: '/reviewer', icon: CodeIcon },
   { name: 'Projects', href: '/projects', icon: ProjectsIcon },
   { name: 'Analytics', href: '/analytics', icon: AnalyticsIcon },
   { name: 'Profile', href: '/profile', icon: ProfileIcon },
   { name: 'Settings', href: '/settings', icon: SettingsIcon },
 ];
+
 
 export const DashboardShell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const pathname = usePathname();
