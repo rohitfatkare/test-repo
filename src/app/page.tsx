@@ -8,7 +8,8 @@ import {
   ProjectsIcon, 
   AnalyticsIcon, 
   ProfileIcon, 
-  SettingsIcon 
+  SettingsIcon,
+  CodeIcon
 } from "@/components/Icons";
 
 export default function Home() {
@@ -19,6 +20,13 @@ export default function Home() {
       href: "/dashboard",
       icon: DashboardIcon,
       color: "from-blue-500 to-indigo-500"
+    },
+    {
+      title: "AI Code Reviewer",
+      description: "Audit syntax anomalies, security vulnerabilities, and code optimizations.",
+      href: "/reviewer",
+      icon: CodeIcon,
+      color: "from-indigo-500 to-purple-500"
     },
     {
       title: "Projects Directory",
@@ -49,6 +57,7 @@ export default function Home() {
       color: "from-amber-500 to-orange-500"
     }
   ];
+
 
   return (
     <div className="space-y-8 animate-fade-in">
