@@ -214,7 +214,17 @@ export default function Reviewer() {
 
   // Selected issue for diff view
   const [selectedIssueId, setSelectedIssueId] = useState<string | null>(null);
-  const [isCopied, setIsCopied] = useState(false);
+
+  // Copy suggestion state
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  const handleCopyCode = (text: string, id: string) => {
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }
+  };
 
   const steps = [
     'Parsing abstract syntax tree (AST)...',
@@ -757,25 +767,12 @@ export default function Reviewer() {
               </p>
             </div>
             
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  navigator.clipboard.writeText(currentIssue.after);
-                  setIsCopied(true);
-                  setTimeout(() => setIsCopied(false), 2000);
-                }}
-                className="flex items-center justify-center gap-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs px-4 py-2.5 rounded-xl transition-colors focus:outline-none border border-slate-750"
-              >
-                {isCopied ? '✓ Copied' : '📋 Copy Fix'}
-              </button>
-              <button
-                onClick={() => handleApplyFix(currentIssue)}
-                className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg transition-colors focus:outline-none"
-              >
-                Apply Refactor Fix
-              </button>
-            </div>
+            <button
+              onClick={() => handleApplyFix(currentIssue)}
+              className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg transition-colors focus:outline-none"
+            >
+              Apply Refactor Fix
+            </button>
           </div>
 
           {/* Description & Explanation */}
@@ -806,7 +803,16 @@ export default function Reviewer() {
 
             {/* After (Optimized Code) */}
             <div className="space-y-2">
-              <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">Optimized Suggestion</span>
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wider block">Optimized Suggestion</span>
+                <button
+                  type="button"
+                  onClick={() => handleCopyCode(currentIssue.after, currentIssue.id)}
+                  className="text-[10px] text-indigo-400 hover:text-indigo-300 font-semibold px-2 py-0.5 rounded hover:bg-indigo-500/5 transition-colors focus:outline-none"
+                >
+                  {copiedId === currentIssue.id ? '✓ Copied!' : '📋 Copy Suggestion'}
+                </button>
+              </div>
               <div className="bg-slate-950 border border-emerald-500/10 rounded-xl p-4 font-mono text-xs overflow-x-auto text-emerald-200 min-h-[120px] flex items-center leading-relaxed">
                 <pre className="w-full">
                   {currentIssue.after.split('\n').map((line, i) => (
