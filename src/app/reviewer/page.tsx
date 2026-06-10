@@ -209,6 +209,90 @@ const mockReviews: Record<string, ReviewResult> = {
         after: '# Not required if using set/comprehension\npairs = list({item[\'id\']: item for item in pairs}.values())'
       }
     ]
+  },
+  cache: {
+    score: 55,
+    criticalCount: 1,
+    warningCount: 1,
+    infoCount: 0,
+    maintainability: 'Medium',
+    summary: 'Memory leak hazard found in cache. Unbounded logs accumulation will exceed Node process execution boundaries under high throughput.',
+    issues: [
+      {
+        id: 'cache-1',
+        lineRange: 'Line 6',
+        type: 'critical',
+        category: 'Memory Leak',
+        message: 'Unbounded array `logs` grows continuously. Since this array is globally scoped, the garbage collector cannot clean it up, leading to OOM crash.',
+        before: 'const logs = [];\n\nfunction addToCache(key, value) {\n  logs.push({ key, value, timestamp: Date.now() });',
+        after: '// Use bounded cache libraries or Redis for logging persistence\nconst logs = []; // Keep logs local or prune periodically\nfunction addToCache(key, value) {\n  if (logs.length >= 100) logs.shift(); // Bound memory consumption\n  logs.push({ key, value, timestamp: Date.now() });'
+      },
+      {
+        id: 'cache-2',
+        lineRange: 'Line 5',
+        type: 'warning',
+        category: 'Style & Quality',
+        message: 'Global variable cache is mutable and not guarded against concurrency. Wrap in a thread-safe structure or use private scopes.',
+        before: 'const cache = {};',
+        after: 'const cache = new Map();'
+      }
+    ]
+  },
+  package: {
+    score: 76,
+    criticalCount: 0,
+    warningCount: 2,
+    infoCount: 0,
+    maintainability: 'High',
+    summary: 'Dependency vulnerabilities found. Axios version has high-risk security flaws (CVE-2021-3749) that can expose application endpoints to SSRF.',
+    issues: [
+      {
+        id: 'package-1',
+        lineRange: 'Line 5',
+        type: 'warning',
+        category: 'Security Risk',
+        message: 'Axios 0.21.1 has a high vulnerability to SSRF. Upgrade dependency target to >= 0.21.2 to receive security patch.',
+        before: '"axios": "0.21.1",',
+        after: '"axios": "^0.21.4",'
+      },
+      {
+        id: 'package-2',
+        lineRange: 'Line 6',
+        type: 'warning',
+        category: 'Security Risk',
+        message: 'Express 4.17.1 has multiple security vulnerability issues. Upgrade to stable v4.19.2+ or v5.0.0.',
+        before: '"express": "4.17.1",',
+        after: '"express": "^4.19.2",'
+      }
+    ]
+  },
+  auth: {
+    score: 42,
+    criticalCount: 2,
+    warningCount: 0,
+    infoCount: 1,
+    maintainability: 'Low',
+    summary: 'Critical security vulnerability: JWT signing secret key is hardcoded directly in code, exposing key signing capabilities if git repositories leak.',
+    issues: [
+      {
+        id: 'auth-1',
+        lineRange: 'Line 4',
+        type: 'critical',
+        category: 'Security',
+        message: 'Exposed credentials threat. Hardcoding secret keys allows key leaks via repository exposure. Pull secrets from environment configurations.',
+        before: 'const JWT_SECRET = "super-secret-key-12345-never-share";',
+        after: 'const JWT_SECRET = process.env.JWT_SECRET || (() => { throw new Error("JWT_SECRET environment variable is missing!"); })();'
+      },
+      {
+        id: 'auth-2',
+        lineRange: 'Line 6',
+        type: 'critical',
+        category: 'Strict Types',
+        message: 'Type "any" disables TypeScript compilation type safety checks. Use explicit user payload interface/type.',
+        before: 'export function generateToken(payload: any) {',
+        after: 'interface UserJWTPayload { id: string; role: string; email: string; }\nexport function generateToken(payload: UserJWTPayload) {'
+      }
+    ]
   }
 };
 
@@ -258,6 +342,91 @@ pairs = [item for item in list_a if item['id'] in common_ids]
 };
 
 export default function Reviewer() {
+  // Mock Workspace files
+  const [workspaceFiles, setWorkspaceFiles] = useState<{
+    [path: string]: {
+      name: string;
+      path: string;
+      language: 'javascript' | 'typescript' | 'python' | 'custom';
+      code: string;
+      result: ReviewResult | null;
+      status: 'idle' | 'clean' | 'warning' | 'critical';
+    }
+  }>({
+    'src/utils/db.js': {
+      name: 'db.js',
+      path: 'src/utils/db.js',
+      language: 'javascript',
+      code: examples.javascript.code,
+      result: null,
+      status: 'idle'
+    },
+    'src/services/cache.js': {
+      name: 'cache.js',
+      path: 'src/services/cache.js',
+      language: 'javascript',
+      code: `// Express memory cache leaky implementation
+const cache = {};
+const logs = [];
+
+function addToCache(key, value) {
+  // leak: unbounded array grows continuously
+  logs.push({ key, value, timestamp: Date.now() });
+  cache[key] = value;
+}`,
+      result: null,
+      status: 'idle'
+    },
+    'src/routes/auth.ts': {
+      name: 'auth.ts',
+      path: 'src/routes/auth.ts',
+      language: 'typescript',
+      code: `// Token verification service with exposed signing key
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = "super-secret-key-12345-never-share"; // Exposed Secret!
+
+export function generateToken(payload: any) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
+}`,
+      result: null,
+      status: 'idle'
+    },
+    'src/helpers/utils.py': {
+      name: 'utils.py',
+      path: 'src/helpers/utils.py',
+      language: 'python',
+      code: examples.python.code,
+      result: null,
+      status: 'idle'
+    },
+    'package.json': {
+      name: 'package.json',
+      path: 'package.json',
+      language: 'custom',
+      code: `{
+  "name": "my-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "axios": "0.21.1",
+    "express": "4.17.1",
+    "jsonwebtoken": "8.5.1"
+  }
+}`,
+      result: null,
+      status: 'idle'
+    },
+    'custom.txt': {
+      name: 'custom.txt',
+      path: 'custom.txt',
+      language: 'custom',
+      code: '',
+      result: null,
+      status: 'idle'
+    }
+  });
+
+  const [selectedFilePath, setSelectedFilePath] = useState<string>('src/utils/db.js');
   const [code, setCode] = useState(examples.javascript.code);
   const [language, setLanguage] = useState<'javascript' | 'typescript' | 'python' | 'custom'>('javascript');
   
@@ -271,6 +440,7 @@ export default function Reviewer() {
 
   // Loading analysis state
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isAuditingAll, setIsAuditingAll] = useState(false);
   const [analysisStep, setAnalysisStep] = useState(0);
   const [analysisResult, setAnalysisResult] = useState<ReviewResult | null>(null);
 
@@ -291,6 +461,32 @@ export default function Reviewer() {
   // Console logs state
   const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
 
+  // Load workspace file into editor
+  useEffect(() => {
+    const file = workspaceFiles[selectedFilePath];
+    if (file) {
+      setCode(file.code);
+      setLanguage(file.language);
+      setAnalysisResult(file.result);
+      if (file.result && file.result.issues.length > 0) {
+        setSelectedIssueId(file.result.issues[0].id);
+      } else {
+        setSelectedIssueId(null);
+      }
+    }
+  }, [selectedFilePath]);
+
+  const handleCodeChange = (newCode: string) => {
+    setCode(newCode);
+    setWorkspaceFiles(prev => ({
+      ...prev,
+      [selectedFilePath]: {
+        ...prev[selectedFilePath],
+        code: newCode
+      }
+    }));
+  };
+
   const handleCopyCode = (text: string, id: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text);
@@ -299,7 +495,15 @@ export default function Reviewer() {
     }
   };
 
-  const steps = selectedModel === 'gemini-pro' 
+  const steps = isAuditingAll
+    ? [
+        'Auditing src/utils/db.js (SQL & Leaks)...',
+        'Auditing src/services/cache.js (Memory Cache Leaks)...',
+        'Auditing src/routes/auth.ts (Exposed Credentials)...',
+        'Auditing src/helpers/utils.py (Linear Optimization)...',
+        'Auditing package.json (Dependency Vulnerability Scans)...'
+      ]
+    : selectedModel === 'gemini-pro' 
     ? [
         'Initializing deep neural parser...',
         'Auditing memory vectors & potential leaks...',
@@ -321,7 +525,9 @@ export default function Reviewer() {
         'Generating fast suggestions...'
       ];
 
-  const stepDelay = selectedModel === 'gemini-pro' 
+  const stepDelay = isAuditingAll
+    ? 600
+    : selectedModel === 'gemini-pro' 
     ? 700 
     : selectedModel === 'claude-sonnet' 
     ? 1000 
@@ -335,12 +541,29 @@ export default function Reviewer() {
     setSelectedIssueId(null);
   };
 
+  // Run workspace-wide audit
+  const handleRunWorkspaceAudit = () => {
+    setIsAnalyzing(true);
+    setIsAuditingAll(true);
+    setAnalysisStep(0);
+    setAnalysisResult(null);
+    setSelectedIssueId(null);
+
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    setConsoleLogs([
+      `[${timestamp}] [SYSTEM] Workspace audit initiated.`,
+      `[${timestamp}] [SYSTEM] Searching directories for source files... Found 5 target files.`,
+      `[${timestamp}] [SYSTEM] Active Model: ${selectedModel.toUpperCase()}. Initializing worker threads...`,
+    ]);
+  };
+
   // Run simulated review
   const handleRunReview = (e: React.FormEvent) => {
     e.preventDefault();
     if (!code.trim()) return;
 
     setIsAnalyzing(true);
+    setIsAuditingAll(false);
     setAnalysisStep(0);
     setAnalysisResult(null);
     setSelectedIssueId(null);
@@ -364,135 +587,203 @@ export default function Reviewer() {
           setTimeout(() => {
             setIsAnalyzing(false);
             
-            // Build the result
-            let result: ReviewResult;
-            if (language !== 'custom' && mockReviews[language]) {
-              result = { ...mockReviews[language] };
+            if (isAuditingAll) {
+              setIsAuditingAll(false);
+              
+              // Populate all files results
+              setWorkspaceFiles(prevFiles => {
+                const updated = { ...prevFiles };
+                
+                updated['src/utils/db.js'].result = { ...mockReviews.javascript };
+                updated['src/utils/db.js'].status = 'critical';
+                
+                updated['src/services/cache.js'].result = { ...mockReviews.cache };
+                updated['src/services/cache.js'].status = 'critical';
+                
+                updated['src/routes/auth.ts'].result = { ...mockReviews.auth };
+                updated['src/routes/auth.ts'].status = 'critical';
+                
+                updated['src/helpers/utils.py'].result = { ...mockReviews.python };
+                updated['src/helpers/utils.py'].status = 'warning';
+                
+                updated['package.json'].result = { ...mockReviews.package };
+                updated['package.json'].status = 'warning';
+                
+                return updated;
+              });
+
+              // Set active file results
+              const currentFileKey = 
+                selectedFilePath === 'src/utils/db.js' ? 'javascript' :
+                selectedFilePath === 'src/services/cache.js' ? 'cache' :
+                selectedFilePath === 'src/routes/auth.ts' ? 'auth' :
+                selectedFilePath === 'src/helpers/utils.py' ? 'python' :
+                'package';
+
+              const currentFileResult = mockReviews[currentFileKey];
+              setAnalysisResult(currentFileResult);
+              if (currentFileResult.issues.length > 0) {
+                setSelectedIssueId(currentFileResult.issues[0].id);
+              }
+
+              const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              setConsoleLogs(prevLogs => [
+                ...prevLogs,
+                `[${timestamp}] [SYSTEM] Workspace audit completed successfully.`,
+                `[${timestamp}] [SYSTEM] 5 files scanned. 3 critical issues, 4 warnings identified.`
+              ]);
+
             } else {
-              // Custom code analysis
-              const hasAny = code.includes('any');
-              const hasEval = code.includes('eval(');
-              const hasLoop = code.includes('for ') || code.includes('while ');
-              const hasConsole = code.includes('console.log');
+              // Build the result for single file
+              let result: ReviewResult;
+              if (selectedFilePath === 'src/utils/db.js') {
+                result = { ...mockReviews.javascript };
+              } else if (selectedFilePath === 'src/services/cache.js') {
+                result = { ...mockReviews.cache };
+              } else if (selectedFilePath === 'src/routes/auth.ts') {
+                result = { ...mockReviews.auth };
+              } else if (selectedFilePath === 'src/helpers/utils.py') {
+                result = { ...mockReviews.python };
+              } else if (selectedFilePath === 'package.json') {
+                result = { ...mockReviews.package };
+              } else {
+                // Custom code analysis
+                const hasAny = code.includes('any');
+                const hasEval = code.includes('eval(');
+                const hasLoop = code.includes('for ') || code.includes('while ');
+                const hasConsole = code.includes('console.log');
 
-              const issues: Issue[] = [];
-              if (hasEval) {
-                issues.push({
-                  id: 'cust-eval',
-                  lineRange: 'Line Match',
-                  type: 'critical',
-                  category: 'Security Risk',
-                  message: 'Potential remote code execution vulnerability detected through the use of eval(). Avoid dynamic code execution.',
-                  before: 'eval(userInput);',
-                  after: 'JSON.parse(userInput); // Or secure schema validation'
-                });
+                const issues: Issue[] = [];
+                if (hasEval) {
+                  issues.push({
+                    id: 'cust-eval',
+                    lineRange: 'Line Match',
+                    type: 'critical',
+                    category: 'Security Risk',
+                    message: 'Potential remote code execution vulnerability detected through the use of eval(). Avoid dynamic code execution.',
+                    before: 'eval(userInput);',
+                    after: 'JSON.parse(userInput); // Or secure schema validation'
+                  });
+                }
+                if (hasAny) {
+                  issues.push({
+                    id: 'cust-any',
+                    lineRange: 'Line Match',
+                    type: 'warning',
+                    category: 'Strict Types',
+                    message: 'Overuse of type "any" disables compile-time type verification. Specify exact object properties.',
+                    before: 'let payload: any = ...',
+                    after: 'interface PayloadSchema { id: string; val: number; }\nlet payload: PayloadSchema = ...'
+                  });
+                }
+                if (hasLoop) {
+                  issues.push({
+                    id: 'cust-loop',
+                    lineRange: 'Line Match',
+                    type: 'info',
+                    category: 'Complexity Check',
+                    message: 'Check iteration bounds to avoid CPU core execution lockups in heavy workflows.',
+                    before: 'for (let i = 0; i < arr.length; i++) { ... }',
+                    after: 'arr.forEach(element => { ... }); // Or filter/map operations'
+                  });
+                }
+                if (hasConsole) {
+                  issues.push({
+                    id: 'cust-log',
+                    lineRange: 'Line Match',
+                    type: 'info',
+                    category: 'Telemetry Clean',
+                    message: 'Production build contains console statements. Strip debugging triggers before staging.',
+                    before: 'console.log(debugInfo);',
+                    after: '// Remove logs or use structured Winston/Pino logger'
+                  });
+                }
+
+                // Default safety issue if no issues found
+                if (issues.length === 0) {
+                  issues.push({
+                    id: 'cust-good',
+                    lineRange: 'Workspace',
+                    type: 'info',
+                    category: 'Optimization',
+                    message: 'Code conforms to basic lint directives. Added structured export declarations for reusable builds.',
+                    before: 'module.exports = { run };',
+                    after: 'export const run = () => { ... };'
+                  });
+                }
+
+                const criticals = issues.filter(i => i.type === 'critical').length;
+                const warnings = issues.filter(i => i.type === 'warning').length;
+                const infos = issues.filter(i => i.type === 'info').length;
+
+                const computedScore = Math.max(10, 100 - (criticals * 25) - (warnings * 12) - (infos * 4));
+
+                result = {
+                  score: computedScore,
+                  criticalCount: criticals,
+                  warningCount: warnings,
+                  infoCount: infos,
+                  maintainability: computedScore > 80 ? 'High' : computedScore > 50 ? 'Medium' : 'Low',
+                  summary: `Custom analysis found ${issues.length} audit recommendations. Review the suggestions below to optimize execution safety and latency bounds.`,
+                  issues
+                };
               }
-              if (hasAny) {
-                issues.push({
-                  id: 'cust-any',
-                  lineRange: 'Line Match',
-                  type: 'warning',
-                  category: 'Strict Types',
-                  message: 'Overuse of type "any" disables compile-time type verification. Specify exact object properties.',
-                  before: 'let payload: any = ...',
-                  after: 'interface PayloadSchema { id: string; val: number; }\nlet payload: PayloadSchema = ...'
-                });
+              
+              // Apply checkbox filters
+              if (!auditSecurity) {
+                result.issues = result.issues.filter(i => i.category !== 'Security' && i.category !== 'Security Risk');
               }
-              if (hasLoop) {
-                issues.push({
-                  id: 'cust-loop',
-                  lineRange: 'Line Match',
-                  type: 'info',
-                  category: 'Complexity Check',
-                  message: 'Check iteration bounds to avoid CPU core execution lockups in heavy workflows.',
-                  before: 'for (let i = 0; i < arr.length; i++) { ... }',
-                  after: 'arr.forEach(element => { ... }); // Or filter/map operations'
-                });
+              if (!auditPerformance) {
+                result.issues = result.issues.filter(i => i.category !== 'Complexity' && i.category !== 'Memory Leak' && i.category !== 'Complexity Check');
               }
-              if (hasConsole) {
-                issues.push({
-                  id: 'cust-log',
-                  lineRange: 'Line Match',
-                  type: 'info',
-                  category: 'Telemetry Clean',
-                  message: 'Production build contains console statements. Strip debugging triggers before staging.',
-                  before: 'console.log(debugInfo);',
-                  after: '// Remove logs or use structured Winston/Pino logger'
-                });
+              if (!auditStyle) {
+                result.issues = result.issues.filter(i => i.type !== 'info');
               }
 
-              // Default safety issue if no issues found
-              if (issues.length === 0) {
-                issues.push({
-                  id: 'cust-good',
-                  lineRange: 'Workspace',
-                  type: 'info',
-                  category: 'Optimization',
-                  message: 'Code conforms to basic lint directives. Added structured export declarations for reusable builds.',
-                  before: 'module.exports = { run };',
-                  after: 'export const run = () => { ... };'
-                });
+              // Recalculate stats
+              result.criticalCount = result.issues.filter(i => i.type === 'critical').length;
+              result.warningCount = result.issues.filter(i => i.type === 'warning').length;
+              result.infoCount = result.issues.filter(i => i.type === 'info').length;
+              result.score = Math.max(10, 100 - (result.criticalCount * 25) - (result.warningCount * 12) - (result.infoCount * 4));
+
+              setAnalysisResult(result);
+              if (result.issues.length > 0) {
+                setSelectedIssueId(result.issues[0].id);
               }
 
-              const criticals = issues.filter(i => i.type === 'critical').length;
-              const warnings = issues.filter(i => i.type === 'warning').length;
-              const infos = issues.filter(i => i.type === 'info').length;
+              // Save to workspace file result
+              setWorkspaceFiles(prevFiles => ({
+                ...prevFiles,
+                [selectedFilePath]: {
+                  ...prevFiles[selectedFilePath],
+                  result: result,
+                  status: result.issues.length > 0 
+                    ? (result.issues.some(i => i.type === 'critical') ? 'critical' : 'warning')
+                    : 'clean'
+                }
+              }));
 
-              const computedScore = Math.max(10, 100 - (criticals * 25) - (warnings * 12) - (infos * 4));
+              // Append to history log
+              const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+              setHistory(prev => [
+                {
+                  id: Date.now().toString(),
+                  timestamp,
+                  language,
+                  score: result.score,
+                  code,
+                  result
+                },
+                ...prev
+              ]);
 
-              result = {
-                score: computedScore,
-                criticalCount: criticals,
-                warningCount: warnings,
-                infoCount: infos,
-                maintainability: computedScore > 80 ? 'High' : computedScore > 50 ? 'Medium' : 'Low',
-                summary: `Custom analysis found ${issues.length} audit recommendations. Review the suggestions below to optimize execution safety and latency bounds.`,
-                issues
-              };
+              // Terminal completion log
+              setConsoleLogs(prev => [
+                ...prev,
+                `[${timestamp}] [SYSTEM] Audit completed successfully. Quality score determined: ${result.score}/100.`,
+                `[${timestamp}] [SYSTEM] Found ${result.issues.length} audit recommendations. Ready.`
+              ]);
             }
-            
-            // Apply checkbox filters
-            if (!auditSecurity) {
-              result.issues = result.issues.filter(i => i.category !== 'Security' && i.category !== 'Security Risk');
-            }
-            if (!auditPerformance) {
-              result.issues = result.issues.filter(i => i.category !== 'Complexity' && i.category !== 'Memory Leak' && i.category !== 'Complexity Check');
-            }
-            if (!auditStyle) {
-              result.issues = result.issues.filter(i => i.type !== 'info');
-            }
-
-            // Recalculate stats
-            result.criticalCount = result.issues.filter(i => i.type === 'critical').length;
-            result.warningCount = result.issues.filter(i => i.type === 'warning').length;
-            result.infoCount = result.issues.filter(i => i.type === 'info').length;
-            result.score = Math.max(10, 100 - (result.criticalCount * 25) - (result.warningCount * 12) - (result.infoCount * 4));
-
-            setAnalysisResult(result);
-            if (result.issues.length > 0) {
-              setSelectedIssueId(result.issues[0].id);
-            }
-
-            // Append to history log
-            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-            setHistory(prev => [
-              {
-                id: Date.now().toString(),
-                timestamp,
-                language,
-                score: result.score,
-                code,
-                result
-              },
-              ...prev
-            ]);
-
-            // Terminal completion log
-            setConsoleLogs(prev => [
-              ...prev,
-              `[${timestamp}] [SYSTEM] Audit completed successfully. Quality score determined: ${result.score}/100.`,
-              `[${timestamp}] [SYSTEM] Found ${result.issues.length} audit recommendations. Ready.`
-            ]);
           }, 600);
           return prev;
         }
@@ -501,7 +792,7 @@ export default function Reviewer() {
     }, stepDelay);
 
     return () => clearInterval(timer);
-  }, [isAnalyzing, code, language, auditSecurity, auditPerformance, auditStyle, selectedModel, steps.length, stepDelay]);
+  }, [isAnalyzing, code, language, auditSecurity, auditPerformance, auditStyle, selectedModel, steps.length, stepDelay, isAuditingAll, selectedFilePath]);
 
   // Dynamic telemetry log streaming
   useEffect(() => {
@@ -710,9 +1001,9 @@ ${issue.message}
       <div className="bg-slate-950/20 border border-slate-800/40 p-4 rounded-2xl flex flex-wrap items-center gap-3">
         <span className="text-xs font-bold text-slate-500 uppercase tracking-widest mr-2">Buggy Examples:</span>
         <button
-          onClick={() => handleSelectExample('javascript')}
+          onClick={() => setSelectedFilePath('src/utils/db.js')}
           className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            language === 'javascript'
+            selectedFilePath === 'src/utils/db.js'
               ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
           }`}
@@ -720,9 +1011,9 @@ ${issue.message}
           {examples.javascript.name}
         </button>
         <button
-          onClick={() => handleSelectExample('typescript')}
+          onClick={() => setSelectedFilePath('src/routes/auth.ts')}
           className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            language === 'typescript'
+            selectedFilePath === 'src/routes/auth.ts'
               ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
           }`}
@@ -730,9 +1021,9 @@ ${issue.message}
           {examples.typescript.name}
         </button>
         <button
-          onClick={() => handleSelectExample('python')}
+          onClick={() => setSelectedFilePath('src/helpers/utils.py')}
           className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            language === 'python'
+            selectedFilePath === 'src/helpers/utils.py'
               ? 'bg-purple-500/10 text-purple-400 border-purple-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
           }`}
@@ -740,14 +1031,9 @@ ${issue.message}
           {examples.python.name}
         </button>
         <button
-          onClick={() => {
-            setLanguage('custom');
-            setCode('');
-            setAnalysisResult(null);
-            setSelectedIssueId(null);
-          }}
+          onClick={() => setSelectedFilePath('custom.txt')}
           className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            language === 'custom'
+            selectedFilePath === 'custom.txt'
               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
           }`}
@@ -758,9 +1044,70 @@ ${issue.message}
 
       {/* Main Workspace Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-8">
+
+        {/* Workspace Sidebar (File Tree) */}
+        <div className="lg:col-span-1 bg-slate-950/40 border border-slate-800/60 rounded-2xl p-4 flex flex-col space-y-4 h-[520px]">
+          <div className="flex items-center justify-between border-b border-slate-900 pb-3">
+            <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Workspace Files</h3>
+            <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 font-mono">5 files</span>
+          </div>
+
+          {/* Files List */}
+          <div className="flex-1 overflow-y-auto space-y-1.5 pr-1 custom-scrollbar">
+            {Object.entries(workspaceFiles).map(([path, file]) => {
+              const isActive = selectedFilePath === path;
+              return (
+                <button
+                  key={path}
+                  type="button"
+                  onClick={() => setSelectedFilePath(path)}
+                  className={`w-full flex items-center justify-between p-2 rounded-xl text-left transition-all group cursor-pointer ${
+                    isActive 
+                      ? 'bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 font-semibold shadow-sm' 
+                      : 'border border-transparent hover:bg-slate-950/40 text-slate-400 hover:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 text-xs truncate">
+                    <span className="text-xs shrink-0 select-none">
+                      {file.language === 'python' ? '🐍' : file.language === 'typescript' ? '🟦' : file.language === 'javascript' ? '🟨' : '📄'}
+                    </span>
+                    <div className="truncate">
+                      <p className="truncate text-[10px] leading-tight font-medium">{file.name}</p>
+                      <p className="truncate text-[8px] text-slate-500 font-mono mt-0.5">{file.path}</p>
+                    </div>
+                  </div>
+
+                  {/* Audit status badge dots */}
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
+                    file.status === 'clean' 
+                      ? 'bg-emerald-500 shadow-sm shadow-emerald-500/30' 
+                      : file.status === 'warning'
+                        ? 'bg-amber-500 shadow-sm shadow-amber-500/30'
+                        : file.status === 'critical'
+                          ? 'bg-rose-500 shadow-sm shadow-rose-500/30'
+                          : 'bg-slate-800'
+                  }`} />
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Run Workspace Audit Button */}
+          <button
+            type="button"
+            onClick={handleRunWorkspaceAudit}
+            disabled={isAnalyzing}
+            className="w-full bg-slate-900 border border-slate-800 hover:bg-slate-850 hover:border-slate-750 disabled:bg-slate-950 disabled:border-slate-900 text-white font-bold text-[10px] py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+          >
+            <span>Scan Workspace</span>
+            <svg className="w-3 h-3 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+          </button>
+        </div>
         
-        {/* Left Side: Code Input (2 cols) */}
-        <div className="lg:col-span-3 space-y-6">
+        {/* Middle Column: Code Input (2 cols) */}
+        <div className="lg:col-span-2 space-y-6">
           <form onSubmit={handleRunReview} className="bg-slate-950/40 border border-slate-800/60 rounded-2xl overflow-hidden flex flex-col h-[520px]">
             {/* Input Header */}
             <div className="px-5 py-3.5 bg-slate-950/70 border-b border-slate-850 flex items-center justify-between">
@@ -784,7 +1131,7 @@ ${issue.message}
             <div className="flex-1 relative font-mono text-xs">
               <textarea
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
+                onChange={(e) => handleCodeChange(e.target.value)}
                 placeholder="// Paste target script here to evaluate compiler health..."
                 className="w-full h-full bg-slate-950/20 text-slate-300 p-5 focus:outline-none resize-none overflow-y-auto leading-relaxed custom-scrollbar selection:bg-indigo-500/20"
                 style={{ tabSize: 2 }}
