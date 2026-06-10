@@ -23,6 +23,15 @@ interface ReviewResult {
   summary: string;
 }
 
+interface HistoryItem {
+  id: string;
+  timestamp: string;
+  language: string;
+  score: number;
+  code: string;
+  result: ReviewResult;
+}
+
 const examples = {
   javascript: {
     name: 'JS SQL Injection & Leak',
@@ -218,6 +227,9 @@ export default function Reviewer() {
   // Copy suggestion state
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
+  // Recent reviews history
+  const [history, setHistory] = useState<HistoryItem[]>([]);
+
   const handleCopyCode = (text: string, id: string) => {
     if (typeof navigator !== 'undefined' && navigator.clipboard) {
       navigator.clipboard.writeText(text);
@@ -370,6 +382,20 @@ export default function Reviewer() {
             if (result.issues.length > 0) {
               setSelectedIssueId(result.issues[0].id);
             }
+
+            // Append to history log
+            const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            setHistory(prev => [
+              {
+                id: Date.now().toString(),
+                timestamp,
+                language,
+                score: result.score,
+                code,
+                result
+              },
+              ...prev
+            ]);
           }, 600);
           return prev;
         }
@@ -751,6 +777,48 @@ export default function Reviewer() {
                   </p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Recent Reviews History */}
+          {!isAnalyzing && history.length > 0 && (
+            <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 space-y-3">
+              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Recent Reviews</h4>
+              <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                {history.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setCode(item.code);
+                      setLanguage(item.language as any);
+                      setAnalysisResult(item.result);
+                      if (item.result.issues.length > 0) {
+                        setSelectedIssueId(item.result.issues[0].id);
+                      } else {
+                        setSelectedIssueId(null);
+                      }
+                    }}
+                    className="w-full text-left p-2.5 bg-slate-950/40 hover:bg-slate-950/80 border border-slate-900 hover:border-slate-800 rounded-xl flex items-center justify-between text-xs transition-all cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500 font-mono text-[10px]">{item.timestamp}</span>
+                      <span className="font-semibold text-slate-300 capitalize">{item.language}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                        item.score >= 80 
+                          ? 'text-emerald-400 bg-emerald-500/10' 
+                          : item.score >= 50
+                            ? 'text-amber-400 bg-amber-500/10'
+                            : 'text-rose-400 bg-rose-500/10'
+                      }`}>
+                        {item.score}%
+                      </span>
+                    </div>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
