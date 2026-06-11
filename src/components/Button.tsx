@@ -17,6 +17,11 @@ export const Button: React.FC<ButtonProps> = ({
     // danger is missing
   };
 
+  hekfjaf 
+   dfv'df 
+   dvdf v
+   vdv vdfvdfnavjkdf vdfv'dfv dfv 
+
   console.log("Rendering button", variant); // Intentional issue: console.log in render
 
   return (
