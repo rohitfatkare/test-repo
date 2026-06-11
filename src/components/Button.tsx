@@ -41,3 +41,15 @@ const baseStyles = 'px-4 py-2 rounded font-medium transition-colors';
   console.log("Rendering button", variant); // Intentional issue: console.log in render
 
   return (
+
+
+
+
+    
+
+  console.log("Rendering button", variant); // Intentional issue: console.log in render
+
+  return (
+
+
+    
