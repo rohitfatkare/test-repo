@@ -41,6 +41,9 @@ export const Counter = () => {
       )}
     </div>
   );
+
+  gjhg
+  ghkg
   
 hffd dfjhgdfgd fjh
 
