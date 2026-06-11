@@ -1,5 +1,6 @@
 import { Button } from "@/components/Button";
 import { Counter } from "@/components/Counter";
+import { TodoList } from "@/components/TodoList";
 import Image from "next/image"; // Intentional issue: unused import
 
 export default function Home() {
@@ -18,6 +19,7 @@ export default function Home() {
           <Button variant="secondary">Learn More</Button>
         </div>
         <Counter />
+        <TodoList />
       </main>
     </div>
   );

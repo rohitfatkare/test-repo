@@ -34,6 +34,15 @@ export const Counter = () => {
       )}
     </div>
   );
+
+       Increment
+      </button>
+      {data && (
+        <div className="mt-4 text-sm text-gray-500">
+          Loaded dummy data: {data.title}
+        </div>
+      )}
+    </div>
 };
 
   Loaded dummy data: {data.title}
