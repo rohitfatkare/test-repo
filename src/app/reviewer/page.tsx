@@ -37,6 +37,22 @@ interface ChatMessage {
   text: string;
 }
 
+interface PullRequest {
+  id: string;
+  title: string;
+  description: string;
+  sourceBranch: string;
+  targetBranch: string;
+  status: 'draft' | 'checking' | 'ready' | 'merging' | 'merged';
+  modifiedFiles: string[];
+  ciLogs: string[];
+  ciChecks: {
+    lint: 'pending' | 'running' | 'success' | 'failed';
+    security: 'pending' | 'running' | 'success' | 'failed';
+    tests: 'pending' | 'running' | 'success' | 'failed';
+  };
+}
+
 const examples = {
   javascript: {
     name: 'JS SQL Injection & Leak',
@@ -298,7 +314,7 @@ const mockReviews: Record<string, ReviewResult> = {
 
 const getSimulatedResponse = (question: string, issue: Issue): string => {
   const q = question.toLowerCase();
-  
+
   if (q.includes('why') || q.includes('reason') || q.includes('explain') || q.includes('flag')) {
     if (issue.category === 'Security' || issue.category === 'Security Risk') {
       return `This is marked as a critical security issue because direct interpolation of user inputs into commands (like SQL or system commands) bypasses parameterized shielding. An attacker can append inputs like "1 OR 1=1" to view unauthorized database tables, or execute payloads that delete database nodes. By using parameterized queries, the database engine treats input strictly as data, never executable statements.`;
@@ -311,7 +327,7 @@ const getSimulatedResponse = (question: string, issue: Issue): string => {
     }
     return `This issue was flagged because the current code structure creates execution risks, poor maintainability, or suboptimal performance. Refactoring it simplifies the call stack and ensures the compiler can optimize the execution path.`;
   }
-  
+
   if (q.includes('alternative') || q.includes('other') || q.includes('different') || q.includes('else')) {
     if (issue.category === 'Security' || issue.category === 'Security Risk') {
       return `Yes, an alternative approach is to use an Object-Relational Mapper (ORM) like Prisma, Sequelize, or Mongoose. ORMs automatically parameterize queries under the hood. For example:
@@ -349,6 +365,7 @@ export default function Reviewer() {
       path: string;
       language: 'javascript' | 'typescript' | 'python' | 'custom';
       code: string;
+      originalCode: string;
       result: ReviewResult | null;
       status: 'idle' | 'clean' | 'warning' | 'critical';
     }
@@ -358,6 +375,7 @@ export default function Reviewer() {
       path: 'src/utils/db.js',
       language: 'javascript',
       code: examples.javascript.code,
+      originalCode: examples.javascript.code,
       result: null,
       status: 'idle'
     },
@@ -366,6 +384,15 @@ export default function Reviewer() {
       path: 'src/services/cache.js',
       language: 'javascript',
       code: `// Express memory cache leaky implementation
+const cache = {};
+const logs = [];
+
+function addToCache(key, value) {
+  // leak: unbounded array grows continuously
+  logs.push({ key, value, timestamp: Date.now() });
+  cache[key] = value;
+}`,
+      originalCode: `// Express memory cache leaky implementation
 const cache = {};
 const logs = [];
 
@@ -389,6 +416,14 @@ const JWT_SECRET = "super-secret-key-12345-never-share"; // Exposed Secret!
 export function generateToken(payload: any) {
   return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
 }`,
+      originalCode: `// Token verification service with exposed signing key
+import jwt from 'jsonwebtoken';
+
+const JWT_SECRET = "super-secret-key-12345-never-share"; // Exposed Secret!
+
+export function generateToken(payload: any) {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
+}`,
       result: null,
       status: 'idle'
     },
@@ -397,6 +432,7 @@ export function generateToken(payload: any) {
       path: 'src/helpers/utils.py',
       language: 'python',
       code: examples.python.code,
+      originalCode: examples.python.code,
       result: null,
       status: 'idle'
     },
@@ -413,6 +449,15 @@ export function generateToken(payload: any) {
     "jsonwebtoken": "8.5.1"
   }
 }`,
+      originalCode: `{
+  "name": "my-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "axios": "0.21.1",
+    "express": "4.17.1",
+    "jsonwebtoken": "8.5.1"
+  }
+}`,
       result: null,
       status: 'idle'
     },
@@ -421,6 +466,7 @@ export function generateToken(payload: any) {
       path: 'custom.txt',
       language: 'custom',
       code: '',
+      originalCode: '',
       result: null,
       status: 'idle'
     }
@@ -429,7 +475,7 @@ export function generateToken(payload: any) {
   const [selectedFilePath, setSelectedFilePath] = useState<string>('src/utils/db.js');
   const [code, setCode] = useState(examples.javascript.code);
   const [language, setLanguage] = useState<'javascript' | 'typescript' | 'python' | 'custom'>('javascript');
-  
+
   // Review configuration
   const [auditSecurity, setAuditSecurity] = useState(true);
   const [auditPerformance, setAuditPerformance] = useState(true);
@@ -449,6 +495,21 @@ export function generateToken(payload: any) {
 
   // Copy suggestion state
   const [copiedId, setCopiedId] = useState<string | null>(null);
+
+  // Git & PR Simulation States
+  const [activeTab, setActiveTab] = useState<'editor' | 'pr'>('editor');
+  const [activePR, setActivePR] = useState<PullRequest | null>(null);
+  const [isPRModalOpen, setIsPRModalOpen] = useState(false);
+  const [prTitle, setPrTitle] = useState('');
+  const [prDescription, setPrDescription] = useState('');
+  const [isGeneratingDesc, setIsGeneratingDesc] = useState(false);
+
+  // Helper selectors
+  const modifiedFilesList = Object.entries(workspaceFiles)
+    .filter(([path, file]) => file.code.trim() !== file.originalCode.trim())
+    .map(([path]) => path);
+
+  const hasModifiedFiles = modifiedFilesList.length > 0;
 
   // Recent reviews history
   const [history, setHistory] = useState<HistoryItem[]>([]);
@@ -497,41 +558,41 @@ export function generateToken(payload: any) {
 
   const steps = isAuditingAll
     ? [
-        'Auditing src/utils/db.js (SQL & Leaks)...',
-        'Auditing src/services/cache.js (Memory Cache Leaks)...',
-        'Auditing src/routes/auth.ts (Exposed Credentials)...',
-        'Auditing src/helpers/utils.py (Linear Optimization)...',
-        'Auditing package.json (Dependency Vulnerability Scans)...'
-      ]
-    : selectedModel === 'gemini-pro' 
-    ? [
+      'Auditing src/utils/db.js (SQL & Leaks)...',
+      'Auditing src/services/cache.js (Memory Cache Leaks)...',
+      'Auditing src/routes/auth.ts (Exposed Credentials)...',
+      'Auditing src/helpers/utils.py (Linear Optimization)...',
+      'Auditing package.json (Dependency Vulnerability Scans)...'
+    ]
+    : selectedModel === 'gemini-pro'
+      ? [
         'Initializing deep neural parser...',
         'Auditing memory vectors & potential leaks...',
         'Evaluating AST tree & computational complexity...',
         'Structuring secure refactoring nodes...',
         'Generating deep optimized recommendations...'
       ]
-    : selectedModel === 'claude-sonnet'
-    ? [
-        'Compiling tokens & imports...',
-        'Auditing security boundary vectors...',
-        'Verifying lint constraints & standards...',
-        'Refining model output alignment...',
-        'Assembling syntax diff recommendations...'
-      ]
-    : [ // gemini-flash
-        'Parsing code tree...',
-        'Auditing security & memory leaks...',
-        'Generating fast suggestions...'
-      ];
+      : selectedModel === 'claude-sonnet'
+        ? [
+          'Compiling tokens & imports...',
+          'Auditing security boundary vectors...',
+          'Verifying lint constraints & standards...',
+          'Refining model output alignment...',
+          'Assembling syntax diff recommendations...'
+        ]
+        : [ // gemini-flash
+          'Parsing code tree...',
+          'Auditing security & memory leaks...',
+          'Generating fast suggestions...'
+        ];
 
   const stepDelay = isAuditingAll
     ? 600
-    : selectedModel === 'gemini-pro' 
-    ? 700 
-    : selectedModel === 'claude-sonnet' 
-    ? 1000 
-    : 500;
+    : selectedModel === 'gemini-pro'
+      ? 700
+      : selectedModel === 'claude-sonnet'
+        ? 1000
+        : 500;
 
   // Load example code
   const handleSelectExample = (lang: 'javascript' | 'typescript' | 'python') => {
@@ -586,39 +647,39 @@ export function generateToken(payload: any) {
           clearInterval(timer);
           setTimeout(() => {
             setIsAnalyzing(false);
-            
+
             if (isAuditingAll) {
               setIsAuditingAll(false);
-              
+
               // Populate all files results
               setWorkspaceFiles(prevFiles => {
                 const updated = { ...prevFiles };
-                
+
                 updated['src/utils/db.js'].result = { ...mockReviews.javascript };
                 updated['src/utils/db.js'].status = 'critical';
-                
+
                 updated['src/services/cache.js'].result = { ...mockReviews.cache };
                 updated['src/services/cache.js'].status = 'critical';
-                
+
                 updated['src/routes/auth.ts'].result = { ...mockReviews.auth };
                 updated['src/routes/auth.ts'].status = 'critical';
-                
+
                 updated['src/helpers/utils.py'].result = { ...mockReviews.python };
                 updated['src/helpers/utils.py'].status = 'warning';
-                
+
                 updated['package.json'].result = { ...mockReviews.package };
                 updated['package.json'].status = 'warning';
-                
+
                 return updated;
               });
 
               // Set active file results
-              const currentFileKey = 
+              const currentFileKey =
                 selectedFilePath === 'src/utils/db.js' ? 'javascript' :
-                selectedFilePath === 'src/services/cache.js' ? 'cache' :
-                selectedFilePath === 'src/routes/auth.ts' ? 'auth' :
-                selectedFilePath === 'src/helpers/utils.py' ? 'python' :
-                'package';
+                  selectedFilePath === 'src/services/cache.js' ? 'cache' :
+                    selectedFilePath === 'src/routes/auth.ts' ? 'auth' :
+                      selectedFilePath === 'src/helpers/utils.py' ? 'python' :
+                        'package';
 
               const currentFileResult = mockReviews[currentFileKey];
               setAnalysisResult(currentFileResult);
@@ -728,7 +789,7 @@ export function generateToken(payload: any) {
                   issues
                 };
               }
-              
+
               // Apply checkbox filters
               if (!auditSecurity) {
                 result.issues = result.issues.filter(i => i.category !== 'Security' && i.category !== 'Security Risk');
@@ -757,7 +818,7 @@ export function generateToken(payload: any) {
                 [selectedFilePath]: {
                   ...prevFiles[selectedFilePath],
                   result: result,
-                  status: result.issues.length > 0 
+                  status: result.issues.length > 0
                     ? (result.issues.some(i => i.type === 'critical') ? 'critical' : 'warning')
                     : 'clean'
                 }
@@ -799,7 +860,7 @@ export function generateToken(payload: any) {
     if (!isAnalyzing) return;
 
     const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    
+
     if (selectedModel === 'gemini-pro') {
       const proLogs = [
         `[${timestamp}] [PARSER] Generating syntax mappings... Found ${code.split('\n').length} lines.`,
@@ -856,7 +917,7 @@ export function generateToken(payload: any) {
         const beforeLinesCount = targetBefore.split('\n').length;
         const codeLines = normalizedCode.split('\n');
         const searchLines = targetBefore.split('\n');
-        
+
         // Find matching block indices
         let matchIndex = -1;
         for (let i = 0; i <= codeLines.length - searchLines.length; i++) {
@@ -896,8 +957,8 @@ export function generateToken(payload: any) {
       warningCount: warnings,
       infoCount: infos,
       issues: updatedIssues,
-      summary: updatedIssues.length > 0 
-        ? `Applied refactor fix. ${updatedIssues.length} issues remaining in directory.` 
+      summary: updatedIssues.length > 0
+        ? `Applied refactor fix. ${updatedIssues.length} issues remaining in directory.`
         : 'All issues successfully resolved! Code quality score is optimal.'
     });
 
@@ -908,11 +969,169 @@ export function generateToken(payload: any) {
     }
   };
 
+  // Submit Pull Request
+  const handleSubmitPR = () => {
+    if (!prTitle.trim() || !prDescription.trim()) return;
+
+    const newPR: PullRequest = {
+      id: `PR-${Math.floor(1000 + Math.random() * 9000)}`,
+      title: prTitle,
+      description: prDescription,
+      sourceBranch: 'feature/ai-reviewer',
+      targetBranch: 'master',
+      status: 'draft',
+      modifiedFiles: [...modifiedFilesList],
+      ciLogs: [
+        `[SYSTEM] [${new Date().toLocaleTimeString()}] Pull Request session created.`,
+        `[SYSTEM] [${new Date().toLocaleTimeString()}] Source: feature/ai-reviewer, Target: master`,
+        `[SYSTEM] [${new Date().toLocaleTimeString()}] Files changed: ${modifiedFilesList.join(', ')}`,
+        `[SYSTEM] [${new Date().toLocaleTimeString()}] Waiting for CI/CD checks execution.`
+      ],
+      ciChecks: {
+        lint: 'pending',
+        security: 'pending',
+        tests: 'pending'
+      }
+    };
+
+    setActivePR(newPR);
+    setIsPRModalOpen(false);
+    setActiveTab('pr');
+  };
+
+  // Run CI/CD Pipeline Suite
+  const runCICDSuite = () => {
+    if (!activePR) return;
+
+    setActivePR(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        status: 'checking',
+        ciChecks: {
+          lint: 'running',
+          security: 'running',
+          tests: 'pending'
+        },
+        ciLogs: [
+          ...prev.ciLogs,
+          `[SYSTEM] [${new Date().toLocaleTimeString()}] Starting CI/CD automated runner suite...`,
+          `[SYSTEM] [${new Date().toLocaleTimeString()}] [Stage 1/3] Security vulnerability auditor started.`
+        ]
+      };
+    });
+
+    const stepsList = [
+      () => {
+        // Stage 1 complete, start Stage 2
+        setActivePR(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            ciChecks: {
+              ...prev.ciChecks,
+              security: 'success',
+              lint: 'running'
+            },
+            ciLogs: [
+              ...prev.ciLogs,
+              `[SUCCESS] [${new Date().toLocaleTimeString()}] Security scan clean. 0 vulnerabilities found.`,
+              `[SYSTEM] [${new Date().toLocaleTimeString()}] [Stage 2/3] Code style linting analysis started.`
+            ]
+          };
+        });
+      },
+      () => {
+        // Stage 2 complete, start Stage 3
+        setActivePR(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            ciChecks: {
+              ...prev.ciChecks,
+              lint: 'success',
+              tests: 'running'
+            },
+            ciLogs: [
+              ...prev.ciLogs,
+              `[SUCCESS] [${new Date().toLocaleTimeString()}] Linter checks passed. Spacing & annotations verified.`,
+              `[SYSTEM] [${new Date().toLocaleTimeString()}] [Stage 3/3] Executing workspace unit tests...`
+            ]
+          };
+        });
+      },
+      () => {
+        // Stage 3 complete, PR Ready
+        setActivePR(prev => {
+          if (!prev) return null;
+          return {
+            ...prev,
+            status: 'ready',
+            ciChecks: {
+              ...prev.ciChecks,
+              tests: 'success'
+            },
+            ciLogs: [
+              ...prev.ciLogs,
+              `[SUCCESS] [${new Date().toLocaleTimeString()}] All 14 automated unit tests completed successfully.`,
+              `[SYSTEM] [${new Date().toLocaleTimeString()}] Build verification successful. Pull Request status: READY FOR MERGE.`
+            ]
+          };
+        });
+      }
+    ];
+
+    let currentStep = 0;
+    const interval = setInterval(() => {
+      setActivePR(prev => {
+        if (!prev) {
+          clearInterval(interval);
+          return null;
+        }
+        return prev;
+      });
+      if (currentStep < stepsList.length) {
+        stepsList[currentStep]();
+        currentStep++;
+      } else {
+        clearInterval(interval);
+      }
+    }, 1200);
+  };
+
+  // Merge Pull Request
+  const handleMergePR = () => {
+    if (!activePR || activePR.status !== 'ready') return;
+
+    setActivePR(prev => {
+      if (!prev) return null;
+      return {
+        ...prev,
+        status: 'merging',
+        ciLogs: [...prev.ciLogs, `[SYSTEM] [${new Date().toLocaleTimeString()}] Merging pull request...`]
+      };
+    });
+
+    setTimeout(() => {
+      setWorkspaceFiles(prev => {
+        const updated = { ...prev };
+        activePR.modifiedFiles.forEach(path => {
+          if (updated[path]) {
+            updated[path].originalCode = updated[path].code;
+          }
+        });
+        return updated;
+      });
+      setActivePR(prev => prev ? { ...prev, status: 'merged' } : null);
+      setActiveTab('editor');
+    }, 2500);
+  };
+
   const currentIssue = analysisResult?.issues.find(i => i.id === selectedIssueId);
 
   const handleExportReport = () => {
     if (!analysisResult) return;
-    
+
     const time = new Date().toLocaleString();
     const mdContent = `# AI Code Review Audit Report
 Generated on: ${time}
@@ -988,13 +1207,46 @@ ${issue.message}
   return (
     <div className="space-y-8 animate-fade-in text-slate-100">
       {/* Page Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-900 pb-5">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-white sm:text-3xl">AI Code Reviewer</h2>
           <p className="text-slate-400 text-sm mt-1">
             Autonomous static analyzer audits code for security issues, complexity spikes, and best practices.
           </p>
         </div>
+
+        {/* Tab Selection Switcher (Only visible if activePR is present) */}
+        {activePR && (
+          <div className="flex bg-slate-950/60 p-1 rounded-xl border border-slate-800/80 self-start sm:self-center">
+            <button
+              onClick={() => setActiveTab('editor')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'editor'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              💻 Code Workspace
+            </button>
+            <button
+              onClick={() => setActiveTab('pr')}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                activeTab === 'pr'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              🔀 Pull Request
+              <span className={`inline-block w-2 h-2 rounded-full ${
+                activePR.status === 'ready'
+                  ? 'bg-emerald-400 animate-pulse'
+                  : activePR.status === 'checking'
+                    ? 'bg-amber-400 animate-pulse'
+                    : 'bg-indigo-400'
+              }`} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Preset Loader */}
@@ -1002,41 +1254,37 @@ ${issue.message}
         <span className="text-xs font-bold text-slate-500 uppercase tracking-widest mr-2">Buggy Examples:</span>
         <button
           onClick={() => setSelectedFilePath('src/utils/db.js')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            selectedFilePath === 'src/utils/db.js'
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${selectedFilePath === 'src/utils/db.js'
               ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
-          }`}
+            }`}
         >
           {examples.javascript.name}
         </button>
         <button
           onClick={() => setSelectedFilePath('src/routes/auth.ts')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            selectedFilePath === 'src/routes/auth.ts'
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${selectedFilePath === 'src/routes/auth.ts'
               ? 'bg-blue-500/10 text-blue-400 border-blue-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
-          }`}
+            }`}
         >
           {examples.typescript.name}
         </button>
         <button
           onClick={() => setSelectedFilePath('src/helpers/utils.py')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            selectedFilePath === 'src/helpers/utils.py'
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${selectedFilePath === 'src/helpers/utils.py'
               ? 'bg-purple-500/10 text-purple-400 border-purple-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
-          }`}
+            }`}
         >
           {examples.python.name}
         </button>
         <button
           onClick={() => setSelectedFilePath('custom.txt')}
-          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
-            selectedFilePath === 'custom.txt'
+          className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all ${selectedFilePath === 'custom.txt'
               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 shadow'
               : 'bg-slate-950/50 text-slate-400 border-slate-850 hover:text-slate-300'
-          }`}
+            }`}
         >
           ⌨ Clear / Paste Custom Code
         </button>
@@ -1061,32 +1309,37 @@ ${issue.message}
                   key={path}
                   type="button"
                   onClick={() => setSelectedFilePath(path)}
-                  className={`w-full flex items-center justify-between p-2 rounded-xl text-left transition-all group cursor-pointer ${
-                    isActive 
-                      ? 'bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 font-semibold shadow-sm' 
+                  className={`w-full flex items-center justify-between p-2 rounded-xl text-left transition-all group cursor-pointer ${isActive
+                      ? 'bg-indigo-600/10 border border-indigo-500/20 text-indigo-400 font-semibold shadow-sm'
                       : 'border border-transparent hover:bg-slate-950/40 text-slate-400 hover:text-slate-200'
-                  }`}
+                    }`}
                 >
                   <div className="flex items-center gap-2 text-xs truncate">
                     <span className="text-xs shrink-0 select-none">
                       {file.language === 'python' ? '🐍' : file.language === 'typescript' ? '🟦' : file.language === 'javascript' ? '🟨' : '📄'}
                     </span>
                     <div className="truncate">
-                      <p className="truncate text-[10px] leading-tight font-medium">{file.name}</p>
+                      <div className="flex items-center gap-1.5 truncate">
+                        <p className="truncate text-[10px] leading-tight font-medium">{file.name}</p>
+                        {file.code.trim() !== file.originalCode.trim() && (
+                          <span className="text-[8px] bg-amber-500/15 text-amber-400 px-1 rounded font-bold shrink-0">
+                            M
+                          </span>
+                        )}
+                      </div>
                       <p className="truncate text-[8px] text-slate-500 font-mono mt-0.5">{file.path}</p>
                     </div>
                   </div>
 
                   {/* Audit status badge dots */}
-                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${
-                    file.status === 'clean' 
-                      ? 'bg-emerald-500 shadow-sm shadow-emerald-500/30' 
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${file.status === 'clean'
+                      ? 'bg-emerald-500 shadow-sm shadow-emerald-500/30'
                       : file.status === 'warning'
                         ? 'bg-amber-500 shadow-sm shadow-amber-500/30'
                         : file.status === 'critical'
                           ? 'bg-rose-500 shadow-sm shadow-rose-500/30'
                           : 'bg-slate-800'
-                  }`} />
+                    }`} />
                 </button>
               );
             })}
@@ -1104,359 +1357,622 @@ ${issue.message}
               <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
             </svg>
           </button>
+
+          {/* Conditional Git Simulator Buttons */}
+          {activePR ? (
+            <button
+              type="button"
+              onClick={() => setActiveTab('pr')}
+              className="w-full bg-indigo-600/10 border border-indigo-500/35 hover:bg-indigo-600/20 text-indigo-300 font-bold text-[10px] py-2 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-indigo-950/20"
+            >
+              <span>📂 View Active PR</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+            </button>
+          ) : (
+            hasModifiedFiles && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPrTitle(`fix: resolve quality audits across ${modifiedFilesList.length} files`);
+                  setIsPRModalOpen(true);
+                }}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[10px] py-2.5 rounded-xl transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-lg shadow-emerald-500/10 animate-fade-in"
+              >
+                <span>🚀 Create Pull Request</span>
+                <span className="bg-emerald-700/60 px-1.5 rounded text-[8px] font-bold">
+                  {modifiedFilesList.length}
+                </span>
+              </button>
+            )
+          )}
         </div>
-        
+
         {/* Middle Column: Code Input (2 cols) */}
         <div className="lg:col-span-2 space-y-6">
-          <form onSubmit={handleRunReview} className="bg-slate-950/40 border border-slate-800/60 rounded-2xl overflow-hidden flex flex-col h-[520px]">
-            {/* Input Header */}
-            <div className="px-5 py-3.5 bg-slate-950/70 border-b border-slate-850 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="flex gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
-                  <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
+          {activeTab === 'pr' && activePR ? (
+            /* PR SIMULATION VIEW */
+            <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-6 h-[520px] overflow-y-auto custom-scrollbar flex flex-col space-y-6 animate-fade-in">
+              {/* Header metadata */}
+              <div className="flex items-center justify-between border-b border-slate-900 pb-4 shrink-0">
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 rounded-full font-mono">
+                    {activePR.id}
+                  </span>
+                  <div className="flex items-center gap-1.5 text-xs text-slate-400 font-medium">
+                    <span className="font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-850">{activePR.sourceBranch}</span>
+                    <span>→</span>
+                    <span className="font-mono bg-slate-900 px-2 py-0.5 rounded border border-slate-850">{activePR.targetBranch}</span>
+                  </div>
                 </div>
-                <span className="text-xs text-slate-400 font-mono ml-3 uppercase tracking-wider">
-                  Source editor ({language})
+
+                <span className={`text-[10px] font-bold px-2.5 py-1 rounded-full border uppercase tracking-wider text-center min-w-[70px] ${
+                  activePR.status === 'merged'
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                    : activePR.status === 'ready'
+                      ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20 animate-pulse font-extrabold'
+                      : activePR.status === 'checking'
+                        ? 'bg-amber-500/10 text-amber-400 border-amber-500/20 animate-pulse font-extrabold'
+                        : activePR.status === 'merging'
+                          ? 'bg-indigo-600/20 text-indigo-300 border-indigo-500/30'
+                          : 'bg-slate-800/40 text-slate-400 border-slate-700/50'
+                }`}>
+                  {activePR.status}
                 </span>
               </div>
-              
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] text-slate-500 font-mono">Lines: {code.split('\n').length}</span>
-              </div>
-            </div>
 
-            {/* Code Textarea Area */}
-            <div className="flex-1 relative font-mono text-xs">
-              <textarea
-                value={code}
-                onChange={(e) => handleCodeChange(e.target.value)}
-                placeholder="// Paste target script here to evaluate compiler health..."
-                className="w-full h-full bg-slate-950/20 text-slate-300 p-5 focus:outline-none resize-none overflow-y-auto leading-relaxed custom-scrollbar selection:bg-indigo-500/20"
-                style={{ tabSize: 2 }}
-              />
-            </div>
-
-            {/* Audit Settings Panel */}
-            <div className="p-4 bg-slate-950/70 border-t border-slate-850 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex flex-wrap items-center gap-6">
-                <div className="flex gap-4">
-                  <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
-                    <input
-                      type="checkbox"
-                      checked={auditSecurity}
-                      onChange={(e) => setAuditSecurity(e.target.checked)}
-                      className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
-                    />
-                    Security Audit
-                  </label>
-                  <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
-                    <input
-                      type="checkbox"
-                      checked={auditPerformance}
-                      onChange={(e) => setAuditPerformance(e.target.checked)}
-                      className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
-                    />
-                    Complexity Limits
-                  </label>
-                  <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
-                    <input
-                      type="checkbox"
-                      checked={auditStyle}
-                      onChange={(e) => setAuditStyle(e.target.checked)}
-                      className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
-                    />
-                    Style & Quality
-                  </label>
-                </div>
-
-                <div className="h-4 w-px bg-slate-800/80 hidden sm:block" />
-
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">AI Model:</span>
-                  <select
-                    value={selectedModel}
-                    onChange={(e) => setSelectedModel(e.target.value as any)}
-                    className="bg-slate-900 border border-slate-850 rounded-xl px-2.5 py-1 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 transition-colors"
-                  >
-                    <option value="gemini-flash">Gemini 3.5 Flash</option>
-                    <option value="gemini-pro">Gemini 3.5 Pro</option>
-                    <option value="claude-sonnet">Claude 3.5 Sonnet</option>
-                  </select>
+              {/* Title & Description */}
+              <div className="space-y-2.5 shrink-0">
+                <h3 className="text-base font-bold text-slate-100">{activePR.title}</h3>
+                <div className="bg-slate-950/60 border border-slate-900 rounded-xl p-4 text-xs text-slate-400 leading-relaxed max-h-40 overflow-y-auto custom-scrollbar whitespace-pre-wrap">
+                  {activePR.description}
                 </div>
               </div>
 
-              <button
-                type="submit"
-                disabled={isAnalyzing || !code.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 cursor-pointer"
-              >
-                {isAnalyzing ? 'Analyzing...' : 'Run Code Review'}
-              </button>
-            </div>
-          </form>
-
-          {/* Code Review Progress Banner */}
-          {isAnalyzing && (
-            <div className="bg-slate-950/40 border border-slate-800/60 p-5 rounded-2xl space-y-4 animate-pulse">
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-indigo-400 font-bold font-mono">Running Static Audit Pipeline...</span>
-                <span className="text-slate-500 font-semibold">{Math.round(((analysisStep + 1) / steps.length) * 100)}%</span>
-              </div>
-              <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300"
-                  style={{ width: `${((analysisStep + 1) / steps.length) * 100}%` }}
-                />
-              </div>
-              <p className="text-[10px] text-slate-400 font-medium font-mono">
-                {steps[analysisStep]}
-              </p>
-            </div>
-          )}
-
-          {/* Telemetry Log Terminal */}
-          {(isAnalyzing || consoleLogs.length > 0) && (
-            <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 font-mono text-[10px] leading-relaxed shadow-lg flex flex-col h-[200px] space-y-3">
-              {/* Terminal Header */}
-              <div className="flex items-center justify-between border-b border-slate-800/60 pb-2.5 text-slate-500 select-none">
-                <div className="flex items-center gap-2">
-                  <span className="flex h-2 w-2 relative">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">Telemetry Log Terminal</span>
+              {/* Modified Files list & diff previews */}
+              <div className="flex-1 space-y-4">
+                <h4 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Modified Files & Diff Previews</h4>
+                <div className="space-y-3">
+                  {activePR.modifiedFiles.map(path => {
+                    const file = workspaceFiles[path];
+                    if (!file) return null;
+                    return (
+                      <div key={path} className="border border-slate-900 bg-slate-950/20 rounded-xl overflow-hidden">
+                        <div className="bg-slate-950/60 px-4 py-2 border-b border-slate-900 flex justify-between items-center">
+                          <span className="text-[10px] font-mono text-slate-300 font-bold">{path}</span>
+                          <span className="text-[8px] bg-amber-500/10 text-amber-400 font-bold px-1.5 py-0.5 rounded border border-amber-500/20">MODIFIED</span>
+                        </div>
+                        <div className="p-4 font-mono text-[10px] overflow-x-auto text-slate-400 leading-relaxed bg-slate-950/30 max-h-32 overflow-y-auto custom-scrollbar">
+                          {/* simple diff comparison representation */}
+                          <div className="text-rose-400/90 line-through opacity-60 truncate">
+                            - {file.originalCode.split('\n')[0] || '// original file content...'}
+                          </div>
+                          <div className="text-emerald-400/95 font-semibold truncate">
+                            + {file.code.split('\n')[0] || '// modified code block applied...'}
+                          </div>
+                          <div className="text-slate-600 text-[8px] mt-1.5 italic">
+                            ... file contains {file.code.split('\n').length} lines total
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-                <button 
-                  type="button" 
-                  onClick={() => setConsoleLogs([])} 
-                  className="text-[10px] font-bold text-slate-500 hover:text-slate-300 transition-colors uppercase tracking-wider cursor-pointer"
-                >
-                  Clear Logs
-                </button>
               </div>
-              
-              {/* Terminal Stream */}
-              <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar text-emerald-400/90 font-mono pr-1 select-text">
-                {consoleLogs.map((log, i) => {
-                  let colorClass = "text-emerald-400/90";
-                  if (log.includes("[WARN]")) colorClass = "text-amber-400/90";
-                  if (log.includes("[ERROR]") || log.includes("[VULN]") || log.includes("[SECURITY]")) colorClass = "text-rose-400/90";
-                  if (log.includes("[SYSTEM]")) colorClass = "text-indigo-400/95 font-semibold";
-                  return (
-                    <div key={i} className={`whitespace-pre-wrap ${colorClass}`}>
-                      {log}
+            </div>
+          ) : (
+            <>
+              {/* NORMAL SOURCE EDITOR VIEW */}
+              <form onSubmit={handleRunReview} className="bg-slate-950/40 border border-slate-800/60 rounded-2xl overflow-hidden flex flex-col h-[520px]">
+                {/* Input Header */}
+                <div className="px-5 py-3.5 bg-slate-950/70 border-b border-slate-850 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="flex gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500/80" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-amber-500/80" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500/80" />
                     </div>
-                  );
-                })}
-                {isAnalyzing && (
-                  <div className="text-slate-500 animate-pulse flex items-center gap-1.5">
-                    <span>$ awaiting next packet</span>
-                    <span className="w-1 h-3.5 bg-slate-500 inline-block" />
+                    <span className="text-xs text-slate-400 font-mono ml-3 uppercase tracking-wider">
+                      Source editor ({language})
+                    </span>
                   </div>
-                )}
-              </div>
-            </div>
+
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] text-slate-500 font-mono">Lines: {code.split('\n').length}</span>
+                  </div>
+                </div>
+
+                {/* Code Textarea Area */}
+                <div className="flex-1 relative font-mono text-xs">
+                  <textarea
+                    value={code}
+                    onChange={(e) => handleCodeChange(e.target.value)}
+                    placeholder="// Paste target script here to evaluate compiler health..."
+                    className="w-full h-full bg-slate-950/20 text-slate-300 p-5 focus:outline-none resize-none overflow-y-auto leading-relaxed custom-scrollbar selection:bg-indigo-500/20"
+                    style={{ tabSize: 2 }}
+                  />
+                </div>
+
+                {/* Audit Settings Panel */}
+                <div className="p-4 bg-slate-950/70 border-t border-slate-850 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex flex-wrap items-center gap-6">
+                    <div className="flex gap-4">
+                      <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
+                        <input
+                          type="checkbox"
+                          checked={auditSecurity}
+                          onChange={(e) => setAuditSecurity(e.target.checked)}
+                          className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
+                        />
+                        Security Audit
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
+                        <input
+                          type="checkbox"
+                          checked={auditPerformance}
+                          onChange={(e) => setAuditPerformance(e.target.checked)}
+                          className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
+                        />
+                        Complexity Limits
+                      </label>
+                      <label className="flex items-center gap-2 text-xs font-semibold cursor-pointer text-slate-400 hover:text-slate-200 select-none">
+                        <input
+                          type="checkbox"
+                          checked={auditStyle}
+                          onChange={(e) => setAuditStyle(e.target.checked)}
+                          className="rounded border-slate-800 text-indigo-600 focus:ring-0 bg-slate-900"
+                        />
+                        Style & Quality
+                      </label>
+                    </div>
+
+                    <div className="h-4 w-px bg-slate-800/80 hidden sm:block" />
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">AI Model:</span>
+                      <select
+                        value={selectedModel}
+                        onChange={(e) => setSelectedModel(e.target.value as any)}
+                        className="bg-slate-900 border border-slate-850 rounded-xl px-2.5 py-1 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 transition-colors"
+                      >
+                        <option value="gemini-flash">Gemini 3.5 Flash</option>
+                        <option value="gemini-pro">Gemini 3.5 Pro</option>
+                        <option value="claude-sonnet">Claude 3.5 Sonnet</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={isAnalyzing || !code.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-600 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 cursor-pointer"
+                  >
+                    {isAnalyzing ? 'Analyzing...' : 'Run Code Review'}
+                  </button>
+                </div>
+              </form>
+
+              {/* Code Review Progress Banner */}
+              {isAnalyzing && (
+                <div className="bg-slate-950/40 border border-slate-800/60 p-5 rounded-2xl space-y-4 animate-pulse">
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="text-indigo-400 font-bold font-mono">Running Static Audit Pipeline...</span>
+                    <span className="text-slate-500 font-semibold">{Math.round(((analysisStep + 1) / steps.length) * 100)}%</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all duration-300"
+                      style={{ width: `${((analysisStep + 1) / steps.length) * 100}%` }}
+                    />
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-medium font-mono">
+                    {steps[analysisStep]}
+                  </p>
+                </div>
+              )}
+
+              {/* Telemetry Log Terminal */}
+              {(isAnalyzing || consoleLogs.length > 0) && (
+                <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 font-mono text-[10px] leading-relaxed shadow-lg flex flex-col h-[200px] space-y-3">
+                  {/* Terminal Header */}
+                  <div className="flex items-center justify-between border-b border-slate-800/60 pb-2.5 text-slate-500 select-none">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-2 w-2 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                      </span>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">Telemetry Log Terminal</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setConsoleLogs([])}
+                      className="text-[10px] font-bold text-slate-500 hover:text-slate-300 transition-colors uppercase tracking-wider cursor-pointer"
+                    >
+                      Clear Logs
+                    </button>
+                  </div>
+
+                  {/* Terminal Stream */}
+                  <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar text-emerald-400/90 font-mono pr-1 select-text">
+                    {consoleLogs.map((log, i) => {
+                      let colorClass = "text-emerald-400/90";
+                      if (log.includes("[WARN]")) colorClass = "text-amber-400/90";
+                      if (log.includes("[ERROR]") || log.includes("[VULN]") || log.includes("[SECURITY]")) colorClass = "text-rose-400/90";
+                      if (log.includes("[SYSTEM]")) colorClass = "text-indigo-400/95 font-semibold";
+                      return (
+                        <div key={i} className={`whitespace-pre-wrap ${colorClass}`}>
+                          {log}
+                        </div>
+                      );
+                    })}
+                    {isAnalyzing && (
+                      <div className="text-slate-500 animate-pulse flex items-center gap-1.5">
+                        <span>$ awaiting next packet</span>
+                        <span className="w-1.5 h-3.5 bg-slate-500 inline-block" />
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 
         {/* Right Side: Results & Diff viewer (2 cols if no issues, else 2 cols layout) */}
         <div className="lg:col-span-2 space-y-6">
-          {/* Analysis Welcome Placeholder */}
-          {!isAnalyzing && !analysisResult && (
-            <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-8 text-center h-[520px] flex flex-col justify-center items-center">
-              <div className="w-14 h-14 bg-indigo-500/10 rounded-2xl flex items-center justify-center text-indigo-400 mb-4 border border-indigo-500/20">
-                <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-              </div>
-              <h3 className="text-base font-bold text-slate-200">No active review</h3>
-              <p className="text-xs text-slate-400 max-w-xs mt-2 leading-relaxed">
-                Paste your custom script or load a preset example then click <span className="text-indigo-400 font-bold">Run Code Review</span> to audit file quality.
-              </p>
-            </div>
-          )}
+          {activeTab === 'pr' && activePR ? (
+            /* CI/CD PIPELINE SUITE PANEL & TELEMETRY LOGS */
+            <div className="space-y-6 animate-fade-in">
+              {/* Pipeline Status Check Card */}
+              <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 space-y-5">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-3">
+                  <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">CI/CD Pipeline Status</h3>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-800 text-slate-500 font-mono">3 Stages</span>
+                </div>
 
-          {/* Analysis Results */}
-          {!isAnalyzing && analysisResult && (
-            <div className="space-y-6">
-              {/* Score summary card */}
-              <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 relative overflow-hidden flex flex-col gap-4">
-                <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 rounded-full bg-indigo-500/5 blur-xl" />
-                
-                <div className="flex items-start justify-between relative z-10">
-                  <div className="space-y-2">
-                    <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Health Rating</h3>
-                    <div className="flex items-baseline gap-2">
-                      <span className="text-4xl font-extrabold text-white">{analysisResult.score}</span>
-                      <span className="text-xs text-slate-500 font-bold">/ 100</span>
+                {/* Pipeline Steps */}
+                <div className="space-y-4">
+                  {/* Step 1: Security Audit */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        activePR.ciChecks.security === 'success'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : activePR.ciChecks.security === 'running'
+                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30 animate-pulse'
+                            : 'bg-slate-900 text-slate-500 border border-slate-850'
+                      }`}>
+                        {activePR.ciChecks.security === 'success' ? '✔' : '1'}
+                      </div>
+                      <span className={`text-xs font-semibold ${
+                        activePR.ciChecks.security === 'success' ? 'text-slate-200' : 'text-slate-400'
+                      }`}>
+                        Security Audit (SQL Injection & Memory Leak Scan)
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider font-semibold">
+                      {activePR.ciChecks.security}
+                    </span>
+                  </div>
+
+                  {/* Step 2: Code Linting */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        activePR.ciChecks.lint === 'success'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : activePR.ciChecks.lint === 'running'
+                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30 animate-pulse'
+                            : 'bg-slate-900 text-slate-500 border border-slate-850'
+                      }`}>
+                        {activePR.ciChecks.lint === 'success' ? '✔' : '2'}
+                      </div>
+                      <span className={`text-xs font-semibold ${
+                        activePR.ciChecks.lint === 'success' ? 'text-slate-200' : 'text-slate-400'
+                      }`}>
+                        Code Linting & Syntax Checks
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider font-semibold">
+                      {activePR.ciChecks.lint}
+                    </span>
+                  </div>
+
+                  {/* Step 3: Tests */}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold ${
+                        activePR.ciChecks.tests === 'success'
+                          ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                          : activePR.ciChecks.tests === 'running'
+                            ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30 animate-pulse'
+                            : 'bg-slate-900 text-slate-500 border border-slate-850'
+                      }`}>
+                        {activePR.ciChecks.tests === 'success' ? '✔' : '3'}
+                      </div>
+                      <span className={`text-xs font-semibold ${
+                        activePR.ciChecks.tests === 'success' ? 'text-slate-200' : 'text-slate-400'
+                      }`}>
+                        Workspace Unit Integration Tests
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider font-semibold">
+                      {activePR.ciChecks.tests}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Interactive Action Triggers */}
+                <div className="pt-2 border-t border-slate-900">
+                  {activePR.status === 'draft' && (
+                    <button
+                      type="button"
+                      onClick={runCICDSuite}
+                      className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-2.5 rounded-xl transition-all shadow-lg shadow-indigo-500/10 cursor-pointer text-center"
+                    >
+                      🚀 Run Automated CI/CD Pipeline
+                    </button>
+                  )}
+
+                  {activePR.status === 'ready' && (
+                    <button
+                      type="button"
+                      onClick={handleMergePR}
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2.5 rounded-xl transition-all shadow-lg shadow-emerald-500/10 cursor-pointer text-center animate-pulse"
+                    >
+                      🤝 Merge Pull Request into Master
+                    </button>
+                  )}
+
+                  {activePR.status === 'merging' && (
+                    <div className="flex items-center justify-center gap-2 py-2.5 text-xs text-indigo-400 font-semibold">
+                      <span className="animate-spin h-4 w-4 border-2 border-indigo-400 border-t-transparent rounded-full" />
+                      <span>Merging patch-files into Master...</span>
+                    </div>
+                  )}
+
+                  {activePR.status === 'merged' && (
+                    <div className="bg-emerald-500/5 border border-emerald-500/20 p-4 rounded-xl text-center text-xs text-emerald-400 font-semibold">
+                      ✔ PR Merged successfully! Changes are pushed.
+                    </div>
+                  )}
+
+                  {activePR.status === 'checking' && (
+                    <div className="bg-amber-500/5 border border-amber-500/20 p-4 rounded-xl text-center text-xs text-amber-400 font-semibold animate-pulse">
+                      ⏳ Executing pipeline tests... Please wait
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Pipeline Live Logs Console */}
+              <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 font-mono text-[10px] leading-relaxed shadow-lg flex flex-col h-[280px] space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-900 pb-2.5 text-slate-500 select-none">
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                    </span>
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-300">CI/CD Terminal Stream</span>
+                  </div>
+                </div>
+
+                {/* Logs Stream */}
+                <div className="flex-1 overflow-y-auto space-y-1.5 custom-scrollbar text-slate-300 font-mono pr-1 select-text">
+                  {activePR.ciLogs.map((log, i) => {
+                    let colorClass = "text-slate-300";
+                    if (log.includes("[WARN]")) colorClass = "text-amber-400/90";
+                    if (log.includes("[ERROR]") || log.includes("[FAILED]")) colorClass = "text-rose-400/90";
+                    if (log.includes("[SUCCESS]")) colorClass = "text-emerald-400/95 font-semibold";
+                    if (log.includes("[SYSTEM]")) colorClass = "text-indigo-400 font-semibold";
+                    return (
+                      <div key={i} className={`whitespace-pre-wrap ${colorClass}`}>
+                        {log}
+                      </div>
+                    );
+                  })}
+                  {activePR.status === 'checking' && (
+                    <div className="text-slate-500 animate-pulse flex items-center gap-1.5">
+                      <span>$ running automated test runners</span>
+                      <span className="w-1.5 h-3.5 bg-slate-500 inline-block" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* Analysis Welcome Placeholder */}
+              {!isAnalyzing && !analysisResult && (
+                <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-8 text-center h-[520px] flex flex-col justify-center items-center">
+                  <div className="w-14 h-14 bg-indigo-500/10 rounded-2xl flex items-center justify-center text-indigo-400 mb-4 border border-indigo-500/20">
+                    <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                    </svg>
+                  </div>
+                  <h3 className="text-base font-bold text-slate-200">No active review</h3>
+                  <p className="text-xs text-slate-400 max-w-xs mt-2 leading-relaxed">
+                    Paste your custom script or load a preset example then click <span className="text-indigo-400 font-bold">Run Code Review</span> to audit file quality.
+                  </p>
+                </div>
+              )}
+
+              {/* Analysis Results */}
+              {!isAnalyzing && analysisResult && (
+                <div className="space-y-6">
+                  {/* Score summary card */}
+                  <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 relative overflow-hidden flex flex-col gap-4">
+                    <div className="absolute top-0 right-0 -mt-4 -mr-4 w-24 h-24 rounded-full bg-indigo-500/5 blur-xl" />
+
+                    <div className="flex items-start justify-between relative z-10">
+                      <div className="space-y-2">
+                        <h3 className="text-xs font-bold text-slate-400 uppercase tracking-wider">Health Rating</h3>
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-4xl font-extrabold text-white">{analysisResult.score}</span>
+                          <span className="text-xs text-slate-500 font-bold">/ 100</span>
+                        </div>
+                      </div>
+
+                      {/* Download Report Button */}
+                      <button
+                        type="button"
+                        onClick={handleExportReport}
+                        className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold px-3 py-1.5 rounded-xl border border-indigo-500/15 bg-indigo-500/5 hover:bg-indigo-500/10 transition-colors focus:outline-none cursor-pointer"
+                      >
+                        <span>Download Report</span>
+                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-6 border-t border-slate-900/60 pt-3 relative z-10">
+                      <div className="flex items-center gap-2 mt-1">
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${analysisResult.score >= 80
+                            ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                            : analysisResult.score >= 50
+                              ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                              : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                          }`}>
+                          {analysisResult.score >= 80 ? 'Good Code' : analysisResult.score >= 50 ? 'Needs Work' : 'Risky Code'}
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          Maintainability: <strong className="text-slate-300">{analysisResult.maintainability}</strong>
+                        </span>
+                      </div>
+
+                      {/* Score wheel circle */}
+                      <div className="relative w-12 h-12 shrink-0 flex items-center justify-center">
+                        <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
+                          <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#1e293b" strokeWidth="3" />
+                          <circle
+                            cx="18"
+                            cy="18"
+                            r="15.915"
+                            fill="transparent"
+                            stroke={analysisResult.score >= 80 ? '#10b981' : analysisResult.score >= 50 ? '#f59e0b' : '#f43f5e'}
+                            strokeWidth="3"
+                            strokeDasharray={`${analysisResult.score} 100`}
+                            className="transition-all duration-1000 ease-out"
+                          />
+                        </svg>
+                        <span className="absolute text-[10px] font-black text-slate-300">{analysisResult.score}%</span>
+                      </div>
                     </div>
                   </div>
-                  
-                  {/* Download Report Button */}
-                  <button
-                    type="button"
-                    onClick={handleExportReport}
-                    className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 font-semibold px-3 py-1.5 rounded-xl border border-indigo-500/15 bg-indigo-500/5 hover:bg-indigo-500/10 transition-colors focus:outline-none cursor-pointer"
-                  >
-                    <span>Download Report</span>
-                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                    </svg>
-                  </button>
-                </div>
 
-                <div className="flex items-center justify-between gap-6 border-t border-slate-900/60 pt-3 relative z-10">
-                  <div className="flex items-center gap-2 mt-1">
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                      analysisResult.score >= 80 
-                        ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' 
-                        : analysisResult.score >= 50
-                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                          : 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                    }`}>
-                      {analysisResult.score >= 80 ? 'Good Code' : analysisResult.score >= 50 ? 'Needs Work' : 'Risky Code'}
-                    </span>
-                    <span className="text-[10px] text-slate-500">
-                      Maintainability: <strong className="text-slate-300">{analysisResult.maintainability}</strong>
-                    </span>
+                  {/* Stats overview */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-slate-950/40 border border-slate-800/60 p-3.5 rounded-xl text-center">
+                      <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Critical</p>
+                      <p className={`text-lg font-bold mt-1 ${analysisResult.criticalCount > 0 ? 'text-rose-400' : 'text-slate-400'}`}>
+                        {analysisResult.criticalCount}
+                      </p>
+                    </div>
+                    <div className="bg-slate-950/40 border border-slate-800/60 p-3.5 rounded-xl text-center">
+                      <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Warnings</p>
+                      <p className={`text-lg font-bold mt-1 ${analysisResult.warningCount > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
+                        {analysisResult.warningCount}
+                      </p>
+                    </div>
+                    <div className="bg-slate-950/40 border border-slate-800/60 p-3.5 rounded-xl text-center">
+                      <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Optimizations</p>
+                      <p className={`text-lg font-bold mt-1 ${analysisResult.infoCount > 0 ? 'text-indigo-400' : 'text-slate-400'}`}>
+                        {analysisResult.infoCount}
+                      </p>
+                    </div>
                   </div>
 
-                  {/* Score wheel circle */}
-                  <div className="relative w-12 h-12 shrink-0 flex items-center justify-center">
-                    <svg viewBox="0 0 36 36" className="w-full h-full transform -rotate-90">
-                      <circle cx="18" cy="18" r="15.915" fill="transparent" stroke="#1e293b" strokeWidth="3" />
-                      <circle 
-                        cx="18" 
-                        cy="18" 
-                        r="15.915" 
-                        fill="transparent" 
-                        stroke={analysisResult.score >= 80 ? '#10b981' : analysisResult.score >= 50 ? '#f59e0b' : '#f43f5e'} 
-                        strokeWidth="3" 
-                        strokeDasharray={`${analysisResult.score} 100`}
-                        className="transition-all duration-1000 ease-out"
-                      />
-                    </svg>
-                    <span className="absolute text-[10px] font-black text-slate-300">{analysisResult.score}%</span>
+                  {/* Summary message */}
+                  <div className="bg-slate-950/30 border border-slate-850 p-4 rounded-xl text-xs text-slate-400 leading-relaxed">
+                    {analysisResult.summary}
                   </div>
-                </div>
-              </div>
 
-              {/* Stats overview */}
-              <div className="grid grid-cols-3 gap-3">
-                <div className="bg-slate-950/40 border border-slate-800/60 p-3.5 rounded-xl text-center">
-                  <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Critical</p>
-                  <p className={`text-lg font-bold mt-1 ${analysisResult.criticalCount > 0 ? 'text-rose-400' : 'text-slate-400'}`}>
-                    {analysisResult.criticalCount}
-                  </p>
+                  {/* Issue list */}
+                  {analysisResult.issues.length > 0 ? (
+                    <div className="space-y-3">
+                      <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Audit Findings</h4>
+                      <div className="max-h-72 overflow-y-auto space-y-2.5 pr-1 custom-scrollbar">
+                        {analysisResult.issues.map((issue) => (
+                          <button
+                            key={issue.id}
+                            type="button"
+                            onClick={() => setSelectedIssueId(issue.id)}
+                            className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 block ${selectedIssueId === issue.id
+                                ? 'bg-slate-950/80 border-slate-700 shadow-md'
+                                : 'bg-slate-950/20 border-slate-850 hover:bg-slate-950/40 hover:border-slate-800'
+                              }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${issue.type === 'critical'
+                                  ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
+                                  : issue.type === 'warning'
+                                    ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
+                                    : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
+                                }`}>
+                                {issue.category}
+                              </span>
+                              <span className="text-[9px] text-slate-500 font-mono font-semibold">{issue.lineRange}</span>
+                            </div>
+                            <p className="text-xs font-bold text-slate-200 mt-2 truncate">{issue.message}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-emerald-500/5 border border-emerald-500/25 p-6 rounded-2xl text-center space-y-2">
+                      <div className="w-10 h-10 bg-emerald-500/10 rounded-full flex items-center justify-center text-emerald-400 mx-auto">
+                        ✔
+                      </div>
+                      <h4 className="text-xs font-bold text-slate-200">No issues found!</h4>
+                      <p className="text-[10px] text-slate-400 max-w-xs mx-auto">
+                        Your code conforms fully to target metrics. No critical errors or vulnerabilities were detected.
+                      </p>
+                    </div>
+                  )}
                 </div>
-                <div className="bg-slate-950/40 border border-slate-800/60 p-3.5 rounded-xl text-center">
-                  <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Warnings</p>
-                  <p className={`text-lg font-bold mt-1 ${analysisResult.warningCount > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
-                    {analysisResult.warningCount}
-                  </p>
-                </div>
-                <div className="bg-slate-950/40 border border-slate-800/60 p-3.5 rounded-xl text-center">
-                  <p className="text-[9px] text-slate-500 font-semibold uppercase tracking-wider">Optimizations</p>
-                  <p className={`text-lg font-bold mt-1 ${analysisResult.infoCount > 0 ? 'text-indigo-400' : 'text-slate-400'}`}>
-                    {analysisResult.infoCount}
-                  </p>
-                </div>
-              </div>
+              )}
 
-              {/* Summary message */}
-              <div className="bg-slate-950/30 border border-slate-850 p-4 rounded-xl text-xs text-slate-400 leading-relaxed">
-                {analysisResult.summary}
-              </div>
-
-              {/* Issue list */}
-              {analysisResult.issues.length > 0 ? (
-                <div className="space-y-3">
-                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Audit Findings</h4>
-                  <div className="max-h-72 overflow-y-auto space-y-2.5 pr-1 custom-scrollbar">
-                    {analysisResult.issues.map((issue) => (
+              {/* Recent Reviews History */}
+              {!isAnalyzing && history.length > 0 && (
+                <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 space-y-3">
+                  <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Recent Reviews</h4>
+                  <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
+                    {history.map((item) => (
                       <button
-                        key={issue.id}
+                        key={item.id}
                         type="button"
-                        onClick={() => setSelectedIssueId(issue.id)}
-                        className={`w-full text-left p-3.5 rounded-xl border transition-all duration-200 block ${
-                          selectedIssueId === issue.id
-                            ? 'bg-slate-950/80 border-slate-700 shadow-md'
-                            : 'bg-slate-950/20 border-slate-850 hover:bg-slate-950/40 hover:border-slate-800'
-                        }`}
+                        onClick={() => {
+                          setCode(item.code);
+                          setLanguage(item.language as any);
+                          setAnalysisResult(item.result);
+                          if (item.result.issues.length > 0) {
+                            setSelectedIssueId(item.result.issues[0].id);
+                          } else {
+                            setSelectedIssueId(null);
+                          }
+                        }}
+                        className="w-full text-left p-2.5 bg-slate-950/40 hover:bg-slate-950/80 border border-slate-900 hover:border-slate-800 rounded-xl flex items-center justify-between text-xs transition-all cursor-pointer"
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full border ${
-                            issue.type === 'critical'
-                              ? 'bg-rose-500/10 text-rose-400 border-rose-500/20'
-                              : issue.type === 'warning'
-                                ? 'bg-amber-500/10 text-amber-400 border-amber-500/20'
-                                : 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20'
-                          }`}>
-                            {issue.category}
-                          </span>
-                          <span className="text-[9px] text-slate-500 font-mono font-semibold">{issue.lineRange}</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-slate-500 font-mono text-[10px]">{item.timestamp}</span>
+                          <span className="font-semibold text-slate-300 capitalize">{item.language}</span>
                         </div>
-                        <p className="text-xs font-bold text-slate-200 mt-2 truncate">{issue.message}</p>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${item.score >= 80
+                              ? 'text-emerald-400 bg-emerald-500/10'
+                              : item.score >= 50
+                                ? 'text-amber-400 bg-amber-500/10'
+                                : 'text-rose-400 bg-rose-500/10'
+                            }`}>
+                            {item.score}%
+                          </span>
+                        </div>
                       </button>
                     ))}
                   </div>
                 </div>
-              ) : (
-                <div className="bg-emerald-500/5 border border-emerald-500/25 p-6 rounded-2xl text-center space-y-2">
-                  <div className="w-10 h-10 bg-emerald-500/10 rounded-full flex items-center justify-center text-emerald-400 mx-auto">
-                    ✔
-                  </div>
-                  <h4 className="text-xs font-bold text-slate-200">No issues found!</h4>
-                  <p className="text-[10px] text-slate-400 max-w-xs mx-auto">
-                    Your code conforms fully to target metrics. No critical errors or vulnerabilities were detected.
-                  </p>
-                </div>
               )}
-            </div>
-          )}
-
-          {/* Recent Reviews History */}
-          {!isAnalyzing && history.length > 0 && (
-            <div className="bg-slate-950/40 border border-slate-800/60 rounded-2xl p-5 space-y-3">
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-widest">Recent Reviews</h4>
-              <div className="space-y-2 max-h-40 overflow-y-auto custom-scrollbar">
-                {history.map((item) => (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => {
-                      setCode(item.code);
-                      setLanguage(item.language as any);
-                      setAnalysisResult(item.result);
-                      if (item.result.issues.length > 0) {
-                        setSelectedIssueId(item.result.issues[0].id);
-                      } else {
-                        setSelectedIssueId(null);
-                      }
-                    }}
-                    className="w-full text-left p-2.5 bg-slate-950/40 hover:bg-slate-950/80 border border-slate-900 hover:border-slate-800 rounded-xl flex items-center justify-between text-xs transition-all cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="text-slate-500 font-mono text-[10px]">{item.timestamp}</span>
-                      <span className="font-semibold text-slate-300 capitalize">{item.language}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                        item.score >= 80 
-                          ? 'text-emerald-400 bg-emerald-500/10' 
-                          : item.score >= 50
-                            ? 'text-amber-400 bg-amber-500/10'
-                            : 'text-rose-400 bg-rose-500/10'
-                      }`}>
-                        {item.score}%
-                      </span>
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
+            </>
           )}
         </div>
       </div>
@@ -1471,7 +1987,7 @@ ${issue.message}
                 Detailed comparison of current implementation vs optimized code.
               </p>
             </div>
-            
+
             <button
               onClick={() => handleApplyFix(currentIssue)}
               className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs px-4 py-2.5 rounded-xl shadow-lg transition-colors focus:outline-none"
@@ -1490,7 +2006,7 @@ ${issue.message}
 
           {/* Diff Box */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            
+
             {/* Before (Buggy Code) */}
             <div className="space-y-2">
               <span className="text-[10px] font-bold text-rose-400 uppercase tracking-wider block">Current Block</span>
@@ -1553,18 +2069,17 @@ ${issue.message}
               <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar mb-4">
                 {chatMessages.map((msg, i) => (
                   <div key={i} className={`flex ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${
-                      msg.sender === 'user'
+                    <div className={`max-w-[85%] rounded-2xl px-4 py-2.5 text-xs leading-relaxed ${msg.sender === 'user'
                         ? 'bg-indigo-600 text-white rounded-tr-none'
                         : 'bg-slate-900 border border-slate-800 text-slate-300 rounded-tl-none'
-                    }`}>
+                      }`}>
                       {msg.text.split('\n').map((line, j) => (
                         <p key={j} className={j > 0 ? 'mt-1.5' : ''}>{line}</p>
                       ))}
                     </div>
                   </div>
                 ))}
-                
+
                 {isChatTyping && (
                   <div className="flex justify-start">
                     <div className="bg-slate-900 border border-slate-800 text-slate-400 rounded-2xl rounded-tl-none px-4 py-3 flex gap-1.5 items-center">
@@ -1605,7 +2120,7 @@ ${issue.message}
               </div>
 
               {/* Chat Input Field */}
-              <form 
+              <form
                 onSubmit={(e) => {
                   e.preventDefault();
                   handleSendChatMessage(chatInput);
@@ -1631,6 +2146,113 @@ ${issue.message}
             </div>
           </div>
 
+        </div>
+      )}
+
+      {/* Create Pull Request Glassmorphic Modal */}
+      {isPRModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm animate-fade-in p-4">
+          <div className="bg-slate-900/90 border border-slate-800/80 rounded-2xl max-w-lg w-full overflow-hidden shadow-2xl flex flex-col animate-scale-up">
+            {/* Modal Header */}
+            <div className="px-6 py-4 bg-slate-950/40 border-b border-slate-800/60 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider">Create Pull Request</h3>
+              <button
+                type="button"
+                onClick={() => setIsPRModalOpen(false)}
+                className="text-slate-500 hover:text-slate-300 text-lg cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Content Form */}
+            <div className="p-6 space-y-4 flex-1">
+              <div>
+                <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
+                  PR Title
+                </label>
+                <input
+                  type="text"
+                  value={prTitle}
+                  onChange={(e) => setPrTitle(e.target.value)}
+                  className="w-full bg-slate-950/60 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500 transition-colors"
+                  placeholder="e.g. fix: resolve SQL injection vulnerabilities"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                    PR Description
+                  </label>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setIsGeneratingDesc(true);
+                      await new Promise(resolve => setTimeout(resolve, 1500));
+                      setPrDescription(`This pull request resolves various security warnings, memory leaks, and formatting issues identified by the AI Code Reviewer.
+
+### Changes Applied:
+- Swapped unsafe database string concatenation with parameterized MySQL queries.
+- Cleaned up raw client socket connections by integrating clean disconnect event handlers.
+- Refactored unannotated variable declarations across evaluated helper modules.
+
+*Review verified by the AI Code Reviewer module.*`);
+                      setIsGeneratingDesc(false);
+                    }}
+                    disabled={isGeneratingDesc}
+                    className="text-[9px] font-bold text-indigo-400 hover:text-indigo-300 transition-colors cursor-pointer flex items-center gap-1"
+                  >
+                    {isGeneratingDesc ? (
+                      <>
+                        <span className="animate-spin h-2.5 w-2.5 border-2 border-indigo-400 border-t-transparent rounded-full" />
+                        Generating...
+                      </>
+                    ) : (
+                      '✨ Generate description'
+                    )}
+                  </button>
+                </div>
+                <textarea
+                  value={prDescription}
+                  onChange={(e) => setPrDescription(e.target.value)}
+                  rows={6}
+                  className="w-full bg-slate-950/60 border border-slate-800 rounded-xl p-4 text-xs text-slate-300 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition-colors resize-none leading-relaxed custom-scrollbar"
+                  placeholder="Write a summary description of changes applied..."
+                />
+              </div>
+
+              <div className="bg-slate-950/30 border border-slate-900 p-4 rounded-xl space-y-2">
+                <span className="text-[9px] font-bold text-slate-500 uppercase tracking-widest block">
+                  Branch Information
+                </span>
+                <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono">
+                  <span className="bg-slate-950 px-2 py-0.5 rounded border border-slate-850">feature/ai-reviewer</span>
+                  <span>→</span>
+                  <span className="bg-slate-950 px-2 py-0.5 rounded border border-slate-850">master</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Action Buttons */}
+            <div className="px-6 py-4 bg-slate-950/40 border-t border-slate-800/60 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setIsPRModalOpen(false)}
+                className="bg-slate-900 border border-slate-800 hover:bg-slate-850 text-slate-400 hover:text-slate-200 font-bold text-xs px-4 py-2 rounded-xl transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitPR}
+                disabled={!prTitle.trim() || !prDescription.trim()}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-850 disabled:text-slate-600 text-white font-bold text-xs px-5 py-2 rounded-xl transition-all shadow-lg shadow-indigo-500/10 cursor-pointer"
+              >
+                Submit PR
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
