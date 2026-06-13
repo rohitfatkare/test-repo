@@ -12,6 +12,7 @@ import type {
 import { FilterBar } from './FilterBar';
 import { FindingCard } from './FindingCard';
 import { ReviewStats } from './ReviewStats';
+import { SearchInput } from './SearchInput';
 
 function formatDate(iso: string) {
   return new Intl.DateTimeFormat('en-US', {
@@ -23,16 +24,35 @@ function formatDate(iso: string) {
   }).format(new Date(iso));
 }
 
+function matchesSearch(finding: ReviewFinding, query: string) {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return true;
+
+  const haystack = [
+    finding.title,
+    finding.description,
+    finding.file,
+    finding.category,
+    finding.suggestion,
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  return haystack.includes(normalized);
+}
+
 function filterFindings(
   findings: ReviewFinding[],
   severity: SeverityFilter,
   category: CategoryFilter,
   status: StatusFilter,
+  search: string,
 ) {
   return findings.filter((finding) => {
     if (severity !== 'all' && finding.severity !== severity) return false;
     if (category !== 'all' && finding.category !== category) return false;
     if (status !== 'all' && finding.status !== status) return false;
+    if (!matchesSearch(finding, search)) return false;
     return true;
   });
 }
@@ -42,10 +62,11 @@ export function ReviewDashboard() {
   const [severity, setSeverity] = useState<SeverityFilter>('all');
   const [category, setCategory] = useState<CategoryFilter>('all');
   const [status, setStatus] = useState<StatusFilter>('open');
+  const [search, setSearch] = useState('');
 
   const filteredFindings = useMemo(
-    () => filterFindings(findings, severity, category, status),
-    [findings, severity, category, status],
+    () => filterFindings(findings, severity, category, status, search),
+    [findings, severity, category, status, search],
   );
 
   const handleStatusChange = (id: string, newStatus: FindingStatus) => {
@@ -95,19 +116,26 @@ export function ReviewDashboard() {
               ({filteredFindings.length} shown)
             </span>
           </h2>
-          <FilterBar
-            severity={severity}
-            category={category}
-            status={status}
-            onSeverityChange={setSeverity}
-            onCategoryChange={setCategory}
-            onStatusChange={setStatus}
-          />
+          <div className="flex flex-wrap items-center gap-3">
+            <SearchInput value={search} onChange={setSearch} />
+            <FilterBar
+              severity={severity}
+              category={category}
+              status={status}
+              onSeverityChange={setSeverity}
+              onCategoryChange={setCategory}
+              onStatusChange={setStatus}
+            />
+          </div>
         </div>
 
         {filteredFindings.length === 0 ? (
           <div className="rounded-xl border border-dashed border-gray-300 bg-white p-12 text-center">
-            <p className="text-gray-500">No findings match the current filters.</p>
+            <p className="text-gray-500">
+              {search.trim()
+                ? `No findings match "${search.trim()}".`
+                : 'No findings match the current filters.'}
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
