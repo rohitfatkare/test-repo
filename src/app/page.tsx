@@ -1,6 +1,5 @@
 import { Button } from "@/components/Button";
 import { Counter } from "@/components/Counter";
-import Image from "next/image"; // Intentional issue: unused import
 
 export default function Home() {
   return (
@@ -16,6 +15,7 @@ export default function Home() {
         <div className="flex gap-4 justify-center">
           <Button variant="primary">Get Started</Button>
           <Button variant="secondary">Learn More</Button>
+          <Button variant="danger">Delete Demo</Button>
         </div>
         <Counter />
       </main>
