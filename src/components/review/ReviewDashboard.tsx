@@ -131,7 +131,13 @@ export function ReviewDashboard({ initialFileFilter }: ReviewDashboardProps) {
 
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Review Summary</h2>
-        <ReviewStats findings={findings} />
+        <ReviewStats
+          findings={findings}
+          severity={severity}
+          status={status}
+          onSeverityChange={setSeverity}
+          onStatusChange={setStatus}
+        />
       </section>
 
       <section className="space-y-4">
