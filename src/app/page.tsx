@@ -1,6 +1,6 @@
+import Link from "next/link";
 import { Button } from "@/components/Button";
 import { Counter } from "@/components/Counter";
-import Image from "next/image"; // Intentional issue: unused import
 
 export default function Home() {
   return (
@@ -14,7 +14,9 @@ export default function Home() {
           Create a PR to see the AI in action!
         </p>
         <div className="flex gap-4 justify-center">
-          <Button variant="primary">Get Started</Button>
+          <Link href="/review">
+            <Button variant="primary">View Review Dashboard</Button>
+          </Link>
           <Button variant="secondary">Learn More</Button>
         </div>
         <Counter />
