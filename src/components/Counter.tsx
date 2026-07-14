@@ -9,6 +9,7 @@ type TodoPreview = {
 
 export const Counter = () => {
   const [count, setCount] = useState(0);
+  const [step, setStep] = useState(1);
   const [data, setData] = useState<TodoPreview | null>(null);
 
   useEffect(() => {
@@ -22,11 +23,24 @@ export const Counter = () => {
     <div className="p-4 border rounded-md mt-4 bg-gray-50">
       <h2 className="text-xl font-semibold mb-2">Interactive Counter</h2>
       <p className="mb-4 text-gray-700">Current count: {count}</p>
+      
+      <div className="mb-4 flex items-center justify-center gap-2 text-sm">
+        <label htmlFor="step" className="text-gray-700">Step size:</label>
+        <input 
+          id="step" 
+          type="number" 
+          className="w-16 px-2 py-1 border rounded"
+          value={step}
+          onChange={(e) => setStep(Number(e.target.value) || 1)}
+          min="1"
+        />
+      </div>
+
       <div className="flex flex-wrap gap-2 justify-center">
-        <Button variant="primary" onClick={() => setCount((prev) => prev + 1)}>
+        <Button variant="primary" onClick={() => setCount((prev) => prev + step)}>
           Increment
         </Button>
-        <Button variant="secondary" onClick={() => setCount((prev) => prev - 1)}>
+        <Button variant="secondary" onClick={() => setCount((prev) => prev - step)}>
           Decrement
         </Button>
         <Button variant="danger" onClick={() => setCount(0)}>
