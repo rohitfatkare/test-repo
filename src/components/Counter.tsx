@@ -10,6 +10,7 @@ type TodoPreview = {
 export const Counter = () => {
   const [count, setCount] = useState(0);
   const [step, setStep] = useState(1);
+  const [isAutoPlaying, setIsAutoPlaying] = useState(false);
   const [data, setData] = useState<TodoPreview | null>(null);
 
   useEffect(() => {
@@ -18,6 +19,16 @@ export const Counter = () => {
       .then((json: TodoPreview) => setData(json))
       .catch(() => setData(null));
   }, []);
+
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isAutoPlaying) {
+      interval = setInterval(() => {
+        setCount((prev) => prev + step);
+      }, 1000);
+    }
+    return () => clearInterval(interval);
+  }, [isAutoPlaying, step]);
 
   return (
     <div className="p-4 border rounded-md mt-4 bg-gray-50">
@@ -43,8 +54,17 @@ export const Counter = () => {
         <Button variant="secondary" onClick={() => setCount((prev) => prev - step)}>
           Decrement
         </Button>
-        <Button variant="danger" onClick={() => setCount(0)}>
+        <Button variant="danger" onClick={() => { setCount(0); setIsAutoPlaying(false); }}>
           Reset
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2 justify-center">
+        <Button 
+          variant={isAutoPlaying ? "danger" : "primary"} 
+          onClick={() => setIsAutoPlaying(!isAutoPlaying)}
+        >
+          {isAutoPlaying ? "Stop Auto Play" : "Start Auto Play"}
         </Button>
       </div>
       {data && (
