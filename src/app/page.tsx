@@ -13,9 +13,10 @@ export default function Home() {
           This project is used to test the AI-powered code review system.
           Create a PR to see the AI in action!
         </p>
-        <div className="flex gap-4 justify-center">
+        <div className="flex gap-4 justify-center flex-wrap">
           <Button variant="primary">Get Started</Button>
           <Button variant="secondary">Learn More</Button>
+          <Button variant="danger">Delete</Button>
         </div>
         <Counter />
       </main>

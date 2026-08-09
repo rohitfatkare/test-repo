@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { Button } from '@/components/Button';
 
 export const Counter = () => {
   const [count, setCount] = useState(0);
@@ -21,12 +22,17 @@ export const Counter = () => {
     <div className="p-4 border rounded-md mt-4 bg-gray-50">
       <h2 className="text-xl font-semibold mb-2">Interactive Counter</h2>
       <p className="mb-4 text-gray-700">Current count: {count}</p>
-      <button 
-        className="px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 transition"
-        onClick={() => setCount(count + 1)}
-      >
-        Increment
-      </button>
+      <div className="flex gap-2 justify-center flex-wrap">
+        <Button variant="secondary" onClick={() => setCount(count - 1)}>
+          Decrement
+        </Button>
+        <Button variant="primary" onClick={() => setCount(count + 1)}>
+          Increment
+        </Button>
+        <Button variant="danger" onClick={() => setCount(0)}>
+          Reset
+        </Button>
+      </div>
       {data && (
         <div className="mt-4 text-sm text-gray-500">
           Loaded dummy data: {data.title}

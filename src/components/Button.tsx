@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'primary' | 'secondary' | 'danger'; // Added danger but not implemented
+  variant?: 'primary' | 'secondary' | 'danger';
 }
 
 export const Button: React.FC<ButtonProps> = ({ 
@@ -14,7 +14,7 @@ export const Button: React.FC<ButtonProps> = ({
   const variants: any = { // Intentional issue: using any type
     primary: 'bg-blue-600 text-white hover:bg-blue-700',
     secondary: 'bg-gray-200 text-gray-800 hover:bg-gray-300',
-    // danger is missing
+    danger: 'bg-red-600 text-white hover:bg-red-700',
   };
 
   console.log("Rendering button", variant); // Intentional issue: console.log in render
